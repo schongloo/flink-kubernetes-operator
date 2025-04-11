@@ -107,12 +107,13 @@ public class FlinkBlueGreenDeploymentControllerTest {
         var blueGreenDeployment =
                 buildSessionCluster(TEST_DEPLOYMENT_NAME, TEST_NAMESPACE, flinkVersion);
 
-        // 1. Initiate the Green deployment
+        // 1. Initiate the Blue deployment
         var bgSpecBefore = blueGreenDeployment.getSpec();
         Long minReconciliationTs = System.currentTimeMillis() - 1;
         var rs = reconcile(blueGreenDeployment);
 
-        assertSpec(rs, minReconciliationTs);
+        assertTrue(rs.updateControl.isPatchStatus());
+        assertTrue(minReconciliationTs < rs.reconciledStatus.getLastReconciledTimestamp());
 
         // check the status (reconciled spec, reconciled ts, a/b state)
         assertEquals(
@@ -129,12 +130,10 @@ public class FlinkBlueGreenDeploymentControllerTest {
 
         simulateSubmitAndSuccessfulJobStart(deploymentA);
 
-        // 2. Finalize the Green deployment
-        minReconciliationTs = System.currentTimeMillis() - 1;
+        // 2. Finalize the Blue deployment
         rs = reconcile(rs.deployment);
 
-        assertSpec(rs, minReconciliationTs);
-
+        assertTrue(rs.updateControl.isPatchStatus());
         assertEquals(
                 SpecUtils.serializeObject(bgSpecBefore, "spec"),
                 rs.reconciledStatus.getLastReconciledSpec());
@@ -182,7 +181,8 @@ public class FlinkBlueGreenDeploymentControllerTest {
         var flinkDeployments = getFlinkDeployments();
         var greenDeploymentName = flinkDeployments.get(1).getMetadata().getName();
 
-        assertSpec(rs, minReconciliationTs);
+        assertTrue(rs.updateControl.isPatchStatus());
+        assertTrue(minReconciliationTs < rs.reconciledStatus.getLastReconciledTimestamp());
 
         assertEquals(2, flinkDeployments.size());
         assertNull(flinkDeployments.get(0).getSpec().getJob().getInitialSavepointPath());
@@ -211,12 +211,9 @@ public class FlinkBlueGreenDeploymentControllerTest {
         assertEquals(1, flinkDeployments.size());
         assertEquals(greenDeploymentName, flinkDeployments.get(0).getMetadata().getName());
 
-        minReconciliationTs = System.currentTimeMillis() - 1;
         rs = reconcile(rs.deployment);
 
-        // Spec should still be the new one
-        assertSpec(rs, minReconciliationTs);
-
+        assertTrue(rs.updateControl.isPatchStatus());
         assertNotNull(rs.reconciledStatus.getLastReconciledSpec());
         assertEquals(
                 SpecUtils.serializeObject(bgUpdatedSpec, "spec"),
@@ -252,7 +249,8 @@ public class FlinkBlueGreenDeploymentControllerTest {
         var minReconciliationTs = System.currentTimeMillis() - 1;
         rs = reconcile(rs.deployment);
 
-        assertSpec(rs, minReconciliationTs);
+        assertTrue(rs.updateControl.isPatchStatus());
+        assertTrue(minReconciliationTs < rs.reconciledStatus.getLastReconciledTimestamp());
 
         // Assert job status/state is left the way it is and that the Blue job never got submitted
         assertEquals(JobStatus.FAILING, rs.reconciledStatus.getJobStatus().getState());
@@ -315,7 +313,6 @@ public class FlinkBlueGreenDeploymentControllerTest {
 
         // 4a. Simulating the Blue deployment doesn't start correctly (status will remain the same)
         //  Asserting the status retry count is incremented by 1
-        long lastTs = System.currentTimeMillis();
         for (int i = 1; i <= maxNumRetries; i++) {
             Thread.sleep(1);
             rs = reconcile(rs.deployment);
@@ -326,16 +323,13 @@ public class FlinkBlueGreenDeploymentControllerTest {
                     reconciliationReschedulingIntervalMs,
                     rs.updateControl.getScheduleDelay().get());
             assertEquals(i, rs.reconciledStatus.getNumRetries());
-            assertTrue(rs.reconciledStatus.getLastReconciledTimestamp() > lastTs);
-            lastTs = rs.reconciledStatus.getLastReconciledTimestamp();
             System.out.println();
         }
 
         // 4b. After the retries are exhausted
-        var minReconciliationTs = System.currentTimeMillis() - 1;
         rs = reconcile(rs.deployment);
 
-        assertSpec(rs, minReconciliationTs);
+        assertTrue(rs.updateControl.isPatchStatus());
 
         // The first job should be RUNNING, the second should be SUSPENDED
         assertEquals(JobStatus.FAILING, rs.reconciledStatus.getJobStatus().getState());
@@ -361,17 +355,33 @@ public class FlinkBlueGreenDeploymentControllerTest {
 
         // 6. Initiate the redeployment
         var bgUpdatedSpec = rs.deployment.getSpec();
-        minReconciliationTs = System.currentTimeMillis() - 1;
+        var minReconciliationTs = System.currentTimeMillis() - 1;
         rs = reconcile(rs.deployment);
 
         testTransitionToGreen(rs, minReconciliationTs, customValue, bgUpdatedSpec);
     }
 
-    private static void assertSpec(
-            TestingFlinkBlueGreenDeploymentController.BlueGreenReconciliationResult rs,
-            long minReconciliationTs) {
-        assertTrue(rs.updateControl.isPatchStatus());
-        assertTrue(minReconciliationTs < rs.reconciledStatus.getLastReconciledTimestamp());
+    @ParameterizedTest
+    @MethodSource("org.apache.flink.kubernetes.operator.TestUtils#flinkVersions")
+    public void verifySpecChangeDuringTransition(FlinkVersion flinkVersion) throws Exception {
+        var blueGreenDeployment =
+                buildSessionCluster(TEST_DEPLOYMENT_NAME, TEST_NAMESPACE, flinkVersion);
+
+        // 1. Initiate the Blue deployment
+        var originalSpec = blueGreenDeployment.getSpec();
+        var rs = reconcile(blueGreenDeployment);
+
+        // 2. Job starting...
+        simulateSubmitAndSuccessfulJobStart(getFlinkDeployments().get(0));
+
+        // 3. Simulate a spec change before the transition is complete
+        simulateChangeInSpec(rs.deployment, "MODIFIED_VALUE");
+        rs = reconcile(rs.deployment);
+
+        // The spec should have been reverted
+        assertEquals(
+                SpecUtils.serializeObject(originalSpec, "spec"),
+                SpecUtils.serializeObject(rs.deployment.getSpec(), "spec"));
     }
 
     private void simulateChangeInSpec(

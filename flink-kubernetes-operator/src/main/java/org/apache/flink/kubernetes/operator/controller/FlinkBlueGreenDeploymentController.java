@@ -101,8 +101,7 @@ public class FlinkBlueGreenDeploymentController
 
         if (deploymentStatus == null) {
             deploymentStatus = new FlinkBlueGreenDeploymentStatus();
-            deploymentStatus.setLastReconciledSpec(
-                    SpecUtils.serializeObject(flinkBlueGreenDeployment.getSpec(), "spec"));
+            setLastReconciledSpec(flinkBlueGreenDeployment, deploymentStatus);
             return initiateDeployment(
                     flinkBlueGreenDeployment,
                     deploymentStatus,
@@ -115,12 +114,6 @@ public class FlinkBlueGreenDeploymentController
             FlinkBlueGreenDeployments deployments =
                     FlinkBlueGreenDeployments.fromSecondaryResources(josdkContext);
 
-            // TODO: if a new deployment request comes while in the middle of a transition it's
-            //  currently ignored, but the new spec remains changed, should we roll it back?
-            // TODO: if we choose to leave a previously failed deployment 'running' for debug
-            // purposes,
-            //  we should flag it somehow as 'ROLLED_BACK' to signal that it can be overriden by a
-            // new deployment attempt.
             switch (deploymentStatus.getBlueGreenState()) {
                 case ACTIVE_BLUE:
                     return checkAndInitiateDeployment(
@@ -161,7 +154,21 @@ public class FlinkBlueGreenDeploymentController
             FlinkBlueGreenDeployments deployments,
             FlinkBlueGreenDeploymentStatus deploymentStatus,
             DeploymentType currentDeploymentType,
-            Context<FlinkBlueGreenDeployment> josdkContext) {
+            Context<FlinkBlueGreenDeployment> josdkContext)
+            throws JsonProcessingException {
+
+        if (hasSpecChanged(bgDeployment.getSpec(), deploymentStatus, currentDeploymentType)) {
+            // this means the spec was changed during transition,
+            //  ignore the new change, revert the spec and log as warning
+            bgDeployment.setSpec(
+                    SpecUtils.deserializeObject(
+                            deploymentStatus.getLastReconciledSpec(),
+                            "spec",
+                            FlinkBlueGreenDeploymentSpec.class));
+            josdkContext.getClient().resource(bgDeployment).replace();
+            LOG.warn(
+                    "Blue/Green Spec change detected during transition, ignored and reverted to the last reconciled spec");
+        }
 
         var nextState = FlinkBlueGreenDeploymentState.ACTIVE_BLUE;
         FlinkDeployment currentDeployment;
@@ -185,18 +192,8 @@ public class FlinkBlueGreenDeploymentController
 
         if (isDeploymentReady(nextDeployment, josdkContext, deploymentStatus)) {
             return deleteAndFinalize(
-                    bgDeployment,
-                    deploymentStatus,
-                    currentDeploymentType,
-                    josdkContext,
-                    currentDeployment,
-                    nextState);
+                    bgDeployment, deploymentStatus, josdkContext, currentDeployment, nextState);
         } else {
-            // This phase requires rescheduling the reconciliation because the pod initialization
-            // could get stuck
-            //  (e.g. waiting for resources)
-            // TODO: figure out the course of action for error/failure cases
-
             int maxNumRetries = bgDeployment.getSpec().getTemplate().getMaxNumRetries();
             if (maxNumRetries <= 0) {
                 maxNumRetries = DEFAULT_MAX_NUM_RETRIES;
@@ -242,7 +239,6 @@ public class FlinkBlueGreenDeploymentController
     private UpdateControl<FlinkBlueGreenDeployment> deleteAndFinalize(
             FlinkBlueGreenDeployment bgDeployment,
             FlinkBlueGreenDeploymentStatus deploymentStatus,
-            DeploymentType currentDeploymentType,
             Context<FlinkBlueGreenDeployment> josdkContext,
             FlinkDeployment currentDeployment,
             FlinkBlueGreenDeploymentState nextState) {
@@ -251,11 +247,6 @@ public class FlinkBlueGreenDeploymentController
             deleteDeployment(currentDeployment, josdkContext);
             return UpdateControl.noUpdate();
         } else {
-            deploymentStatus.setLastReconciledSpec(
-                    SpecUtils.serializeObject(bgDeployment.getSpec(), "spec"));
-
-            // TODO: Set the new child job STATUS to RUNNING too
-
             return patchStatusUpdateControl(
                     bgDeployment, deploymentStatus, nextState, JobStatus.RUNNING, false);
         }
@@ -272,6 +263,9 @@ public class FlinkBlueGreenDeploymentController
         if (hasSpecChanged(
                 flinkBlueGreenDeployment.getSpec(), deploymentStatus, currentDeploymentType)) {
 
+            // Ack the change in the spec (setLastReconciledSpec)
+            setLastReconciledSpec(flinkBlueGreenDeployment, deploymentStatus);
+
             FlinkDeployment currentFlinkDeployment =
                     DeploymentType.BLUE == currentDeploymentType
                             ? deployments.getFlinkDeploymentBlue()
@@ -285,10 +279,6 @@ public class FlinkBlueGreenDeploymentController
                         FlinkBlueGreenDeploymentState.TRANSITIONING_TO_BLUE;
                 FlinkResourceContext<FlinkDeployment> resourceContext =
                         ctxFactory.getResourceContext(currentFlinkDeployment, josdkContext);
-
-                // TODO: this operation is already done by hasSpecChanged() above, dedup later
-                String serializedSpec =
-                        SpecUtils.serializeObject(flinkBlueGreenDeployment.getSpec(), "spec");
 
                 // Updating status
                 if (DeploymentType.BLUE == currentDeploymentType) {
@@ -323,6 +313,14 @@ public class FlinkBlueGreenDeploymentController
         return UpdateControl.noUpdate();
     }
 
+    private static void setLastReconciledSpec(
+            FlinkBlueGreenDeployment flinkBlueGreenDeployment,
+            FlinkBlueGreenDeploymentStatus deploymentStatus) {
+        deploymentStatus.setLastReconciledSpec(
+                SpecUtils.serializeObject(flinkBlueGreenDeployment.getSpec(), "spec"));
+        deploymentStatus.setLastReconciledTimestamp(System.currentTimeMillis());
+    }
+
     public void logPotentialWarnings(
             FlinkDeployment flinkDeployment,
             Context<FlinkBlueGreenDeployment> josdkContext,
@@ -345,7 +343,7 @@ public class FlinkBlueGreenDeploymentController
             LOG.warn("Deployment not healthy, some Pods have the following status: " + podPhases);
         }
 
-        List<Event> badEvents =
+        List<Event> abnormalEvents =
                 josdkContext
                         .getClient()
                         .v1()
@@ -373,8 +371,8 @@ public class FlinkBlueGreenDeploymentController
                                                                         .contains(p)))
                         .collect(Collectors.toList());
 
-        if (!badEvents.isEmpty()) {
-            LOG.warn("Bad events detected: " + badEvents);
+        if (!abnormalEvents.isEmpty()) {
+            LOG.warn("Abnormal events detected: " + abnormalEvents);
         }
     }
 
@@ -393,9 +391,7 @@ public class FlinkBlueGreenDeploymentController
                                                 .getJobId()),
                                 resourceContext.getObserveConfig());
 
-        // TODO 1: check the last CP age with the logic from
-        // AbstractJobReconciler.changeLastStateIfCheckpointTooOld
-        // TODO 2: if no checkpoint is available, take a savepoint? throw error?
+        // TODO: alternative action if no checkpoint is available?
         if (lastCheckpoint.isEmpty()) {
             throw new IllegalStateException(
                     "Last Checkpoint for Job "
@@ -422,8 +418,6 @@ public class FlinkBlueGreenDeploymentController
                 josdkContext,
                 isFirstDeployment);
 
-        // TODO: set child job status to JobStatus.INITIALIZING
-
         return patchStatusUpdateControl(
                         flinkBlueGreenDeployment,
                         deploymentStatus,
@@ -439,8 +433,7 @@ public class FlinkBlueGreenDeploymentController
             FlinkBlueGreenDeploymentStatus deploymentStatus) {
         if (ResourceLifecycleState.STABLE == deployment.getStatus().getLifecycleState()
                 && JobStatus.RUNNING == deployment.getStatus().getJobStatus().getState()) {
-            // TODO: verify, e.g. will pods be "pending" after the FlinkDeployment is RUNNING and
-            // STABLE?
+            // TODO: checking for running pods seems to be redundant, check if this can be removed
             int notRunningPods =
                     (int)
                             getDeploymentPods(josdkContext, deployment)
@@ -501,7 +494,6 @@ public class FlinkBlueGreenDeploymentController
             deploymentStatus.getJobStatus().setState(jobState);
         }
 
-        deploymentStatus.setLastReconciledTimestamp(System.currentTimeMillis());
         flinkBlueGreenDeployment.setStatus(deploymentStatus);
         return UpdateControl.patchStatus(flinkBlueGreenDeployment);
     }
@@ -553,9 +545,6 @@ public class FlinkBlueGreenDeploymentController
 
     private static void deleteDeployment(
             FlinkDeployment currentDeployment, Context<FlinkBlueGreenDeployment> josdkContext) {
-        // TODO: This gets called multiple times, check to see if it's already in a TERMINATING
-        // state
-        // (or only execute if RUNNING)
         List<StatusDetails> deletedStatus =
                 josdkContext
                         .getClient()

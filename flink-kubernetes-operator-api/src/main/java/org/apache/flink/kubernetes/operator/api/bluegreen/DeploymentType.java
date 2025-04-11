@@ -19,9 +19,15 @@ package org.apache.flink.kubernetes.operator.api.bluegreen;
 
 import org.apache.flink.kubernetes.operator.api.FlinkDeployment;
 
-/** Enumeration of the two possible Flink Blue/Green deployment types. */
+/**
+ * Enumeration of the two possible Flink Blue/Green deployment types. Only one of each type will be
+ * present at all times for a particular job.
+ */
 public enum DeploymentType {
+    /** Identifier for the first or "Blue" deployment type. */
     BLUE,
+
+    /** Identifier for the second or "Green" deployment type. */
     GREEN;
 
     public static DeploymentType fromDeployment(FlinkDeployment flinkDeployment) {

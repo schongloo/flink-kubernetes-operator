@@ -19,8 +19,15 @@ package org.apache.flink.kubernetes.operator.api.status;
 
 /** Enumeration of the possible states of the blue/green transition. */
 public enum FlinkBlueGreenDeploymentState {
+    /** Identifies the system is running normally with a "Blue" deployment type. */
     ACTIVE_BLUE,
+
+    /** Identifies the system is running normally with a "Green" deployment type. */
     ACTIVE_GREEN,
+
+    /** Identifies the system is transitioning from "Green" to "Blue". */
     TRANSITIONING_TO_BLUE,
+
+    /** Identifies the system is transitioning from "Blue" to "Green". */
     TRANSITIONING_TO_GREEN,
 }
