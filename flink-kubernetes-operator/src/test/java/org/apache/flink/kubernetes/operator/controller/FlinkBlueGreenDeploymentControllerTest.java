@@ -242,7 +242,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
         // 3. Simulate a change in the spec to trigger a Blue deployment
         simulateChangeInSpec(rs.deployment, UUID.randomUUID().toString());
 
-        // TODO: simulate a failure in the running deployment
+        // Simulate a failure in the running deployment
         simulateJobFailure(getFlinkDeployments().get(0));
 
         // 4. Initiate the Blue deployment
