@@ -50,6 +50,9 @@ public class FlinkBlueGreenDeploymentStatus {
     /** Current number of retries. */
     private int numRetries;
 
+    /** Timestamp when the deployment became READY/STABLE. Used to determine when to delete it. */
+    private long deploymentReadyTimestamp;
+
     /** Information about the TaskManagers for the scale subresource. */
     private TaskManagerInfo taskManager;
 }

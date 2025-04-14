@@ -27,7 +27,7 @@ spec:
             properties:
               template:
                 properties:
-                  deploymentDeletionDelaySec:
+                  deploymentDeletionDelayMs:
                     type: integer
                   maxNumRetries:
                     type: integer
@@ -10298,6 +10298,11 @@ spec:
                             type: object
                         type: object
                     type: object
+                  transitionMode:
+                    enum:
+                    - ADVANCED
+                    - BASIC
+                    type: string
                 type: object
             type: object
           status:
@@ -10309,6 +10314,8 @@ spec:
                 - TRANSITIONING_TO_BLUE
                 - TRANSITIONING_TO_GREEN
                 type: string
+              deploymentReadyTimestamp:
+                type: integer
               jobStatus:
                 properties:
                   checkpointInfo:

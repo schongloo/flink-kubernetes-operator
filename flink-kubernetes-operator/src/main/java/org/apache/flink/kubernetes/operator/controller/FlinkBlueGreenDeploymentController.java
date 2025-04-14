@@ -61,6 +61,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static io.javaoperatorsdk.operator.api.reconciler.UpdateControl.noUpdate;
+
 /** Controller that runs the main reconcile loop for Flink Blue/Green deployments. */
 @ControllerConfiguration
 public class FlinkBlueGreenDeploymentController
@@ -68,7 +70,7 @@ public class FlinkBlueGreenDeploymentController
                 EventSourceInitializer<FlinkBlueGreenDeployment> {
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkDeploymentController.class);
-    private static final int DEFAULT_MAX_NUM_RETRIES = 5;
+    private static final int DEFAULT_MAX_NUM_RETRIES = 10;
     private static final int DEFAULT_RECONCILIATION_RESCHEDULING_INTERVAL_MS = 15000;
 
     private final FlinkResourceContextFactory ctxFactory;
@@ -144,7 +146,7 @@ public class FlinkBlueGreenDeploymentController
                             DeploymentType.BLUE,
                             josdkContext);
                 default:
-                    return UpdateControl.noUpdate();
+                    return noUpdate();
             }
         }
     }
@@ -191,39 +193,82 @@ public class FlinkBlueGreenDeploymentController
                         + currentDeploymentType);
 
         if (isDeploymentReady(nextDeployment, josdkContext, deploymentStatus)) {
+            return canDelete(
+                    bgDeployment, deploymentStatus, josdkContext, currentDeployment, nextState);
+        } else {
+            return retryOrAbort(
+                    bgDeployment, deploymentStatus, josdkContext, nextDeployment, nextState);
+        }
+    }
+
+    private UpdateControl<FlinkBlueGreenDeployment> canDelete(
+            FlinkBlueGreenDeployment bgDeployment,
+            FlinkBlueGreenDeploymentStatus deploymentStatus,
+            Context<FlinkBlueGreenDeployment> josdkContext,
+            FlinkDeployment currentDeployment,
+            FlinkBlueGreenDeploymentState nextState) {
+        int deploymentDeletionDelayMs =
+                Math.max(bgDeployment.getSpec().getTemplate().getDeploymentDeletionDelayMs(), 0);
+
+        if (deploymentStatus.getDeploymentReadyTimestamp() == 0) {
+            LOG.info(
+                    "Deployment marked ready on "
+                            + System.currentTimeMillis()
+                            + ", rescheduling reconciliation in "
+                            + deploymentDeletionDelayMs
+                            + " ms.");
+            deploymentStatus.setDeploymentReadyTimestamp(System.currentTimeMillis());
+            return patchStatusUpdateControl(bgDeployment, deploymentStatus, null, null)
+                    .rescheduleAfter(deploymentDeletionDelayMs);
+        }
+
+        var deletionTs = deploymentStatus.getDeploymentReadyTimestamp() + deploymentDeletionDelayMs;
+
+        if (deletionTs < System.currentTimeMillis()) {
             return deleteAndFinalize(
                     bgDeployment, deploymentStatus, josdkContext, currentDeployment, nextState);
         } else {
-            int maxNumRetries = bgDeployment.getSpec().getTemplate().getMaxNumRetries();
-            if (maxNumRetries <= 0) {
-                maxNumRetries = DEFAULT_MAX_NUM_RETRIES;
-            }
+            long delay = deletionTs - System.currentTimeMillis();
+            LOG.info("Rescheduling reconciliation (to delete) in " + delay + " ms.");
+            return UpdateControl.<FlinkBlueGreenDeployment>noUpdate().rescheduleAfter(delay);
+        }
+    }
 
-            if (deploymentStatus.getNumRetries() >= maxNumRetries) {
-                // ABORT
-                // Suspend the nextDeployment (FlinkDeployment)
-                nextDeployment.getStatus().getJobStatus().setState(JobStatus.SUSPENDED);
-                josdkContext.getClient().resource(nextDeployment).update();
+    private UpdateControl<FlinkBlueGreenDeployment> retryOrAbort(
+            FlinkBlueGreenDeployment bgDeployment,
+            FlinkBlueGreenDeploymentStatus deploymentStatus,
+            Context<FlinkBlueGreenDeployment> josdkContext,
+            FlinkDeployment nextDeployment,
+            FlinkBlueGreenDeploymentState nextState) {
+        int maxNumRetries = bgDeployment.getSpec().getTemplate().getMaxNumRetries();
+        if (maxNumRetries <= 0) {
+            maxNumRetries = DEFAULT_MAX_NUM_RETRIES;
+        }
 
-                // We indicate this Blue/Green deployment is no longer Transitioning
-                //  and rollback the state value
-                deploymentStatus.setBlueGreenState(
-                        nextState == FlinkBlueGreenDeploymentState.ACTIVE_BLUE
-                                ? FlinkBlueGreenDeploymentState.ACTIVE_GREEN
-                                : FlinkBlueGreenDeploymentState.ACTIVE_BLUE);
+        if (deploymentStatus.getNumRetries() >= maxNumRetries) {
+            // ABORT
+            // Suspend the nextDeployment (FlinkDeployment)
+            nextDeployment.getStatus().getJobStatus().setState(JobStatus.SUSPENDED);
+            josdkContext.getClient().resource(nextDeployment).replace();
 
-                // If the current running FlinkDeployment is not in RUNNING/STABLE,
-                // we flag this Blue/Green as FAILING
-                return patchStatusUpdateControl(
-                        bgDeployment, deploymentStatus, null, JobStatus.FAILING, false);
-            } else {
-                // RETRY
-                deploymentStatus.setNumRetries(deploymentStatus.getNumRetries() + 1);
+            // We indicate this Blue/Green deployment is no longer Transitioning
+            //  and rollback the state value
+            deploymentStatus.setBlueGreenState(
+                    nextState == FlinkBlueGreenDeploymentState.ACTIVE_BLUE
+                            ? FlinkBlueGreenDeploymentState.ACTIVE_GREEN
+                            : FlinkBlueGreenDeploymentState.ACTIVE_BLUE);
 
-                LOG.info("Deployment " + nextDeployment.getMetadata().getName() + " not ready yet");
-                return patchStatusUpdateControl(bgDeployment, deploymentStatus, null, null, false)
-                        .rescheduleAfter(getReconciliationReschedInterval(bgDeployment));
-            }
+            // If the current running FlinkDeployment is not in RUNNING/STABLE,
+            // we flag this Blue/Green as FAILING
+            return patchStatusUpdateControl(
+                    bgDeployment, deploymentStatus, null, JobStatus.FAILING);
+        } else {
+            // RETRY
+            deploymentStatus.setNumRetries(deploymentStatus.getNumRetries() + 1);
+
+            LOG.info("Deployment " + nextDeployment.getMetadata().getName() + " not ready yet");
+            return patchStatusUpdateControl(bgDeployment, deploymentStatus, null, null)
+                    .rescheduleAfter(getReconciliationReschedInterval(bgDeployment));
         }
     }
 
@@ -245,10 +290,11 @@ public class FlinkBlueGreenDeploymentController
 
         if (currentDeployment != null) {
             deleteDeployment(currentDeployment, josdkContext);
-            return UpdateControl.noUpdate();
+            return noUpdate();
         } else {
+            deploymentStatus.setDeploymentReadyTimestamp(0);
             return patchStatusUpdateControl(
-                    bgDeployment, deploymentStatus, nextState, JobStatus.RUNNING, false);
+                    bgDeployment, deploymentStatus, nextState, JobStatus.RUNNING);
         }
     }
 
@@ -301,16 +347,12 @@ public class FlinkBlueGreenDeploymentController
                 // we flag this Blue/Green as FAILING
                 if (deploymentStatus.getJobStatus().getState() != JobStatus.FAILING) {
                     return patchStatusUpdateControl(
-                            flinkBlueGreenDeployment,
-                            deploymentStatus,
-                            null,
-                            JobStatus.FAILING,
-                            false);
+                            flinkBlueGreenDeployment, deploymentStatus, null, JobStatus.FAILING);
                 }
             }
         }
 
-        return UpdateControl.noUpdate();
+        return noUpdate();
     }
 
     private static void setLastReconciledSpec(
@@ -418,12 +460,7 @@ public class FlinkBlueGreenDeploymentController
                 josdkContext,
                 isFirstDeployment);
 
-        return patchStatusUpdateControl(
-                        flinkBlueGreenDeployment,
-                        deploymentStatus,
-                        nextState,
-                        null,
-                        isFirstDeployment)
+        return patchStatusUpdateControl(flinkBlueGreenDeployment, deploymentStatus, nextState, null)
                 .rescheduleAfter(getReconciliationReschedInterval(flinkBlueGreenDeployment));
     }
 
@@ -476,16 +513,15 @@ public class FlinkBlueGreenDeploymentController
             DeploymentType deploymentType) {
 
         String lastReconciledSpec = deploymentStatus.getLastReconciledSpec();
-
-        return !lastReconciledSpec.equals(SpecUtils.serializeObject(newSpec, "spec"));
+        String newSpecSerialized = SpecUtils.serializeObject(newSpec, "spec");
+        return !lastReconciledSpec.equals(newSpecSerialized);
     }
 
     private UpdateControl<FlinkBlueGreenDeployment> patchStatusUpdateControl(
             FlinkBlueGreenDeployment flinkBlueGreenDeployment,
             FlinkBlueGreenDeploymentStatus deploymentStatus,
             FlinkBlueGreenDeploymentState deploymentState,
-            JobStatus jobState,
-            boolean isFirstDeployment) {
+            JobStatus jobState) {
         if (deploymentState != null) {
             deploymentStatus.setBlueGreenState(deploymentState);
         }
@@ -494,6 +530,7 @@ public class FlinkBlueGreenDeploymentController
             deploymentStatus.getJobStatus().setState(jobState);
         }
 
+        deploymentStatus.setLastReconciledTimestamp(System.currentTimeMillis());
         flinkBlueGreenDeployment.setStatus(deploymentStatus);
         return UpdateControl.patchStatus(flinkBlueGreenDeployment);
     }

@@ -77,6 +77,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
     public static final String IMAGE_POLICY = "IfNotPresent";
 
     private static final String CUSTOM_CONFIG_FIELD = "custom-configuration-field";
+    private static final int ALT_DELAY_VALUE = 1200;
     private final FlinkConfigManager configManager = new FlinkConfigManager(new Configuration());
     private TestingFlinkService flinkService;
     private Context<FlinkBlueGreenDeployment> context;
@@ -121,6 +122,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
                 rs.reconciledStatus.getBlueGreenState());
         assertNotNull(rs.reconciledStatus.getLastReconciledSpec());
         assertNull(rs.reconciledStatus.getJobStatus().getState());
+        assertEquals(0, rs.reconciledStatus.getDeploymentReadyTimestamp());
 
         var flinkDeploymentList = getFlinkDeployments();
         assertEquals(1, flinkDeploymentList.size());
@@ -130,16 +132,28 @@ public class FlinkBlueGreenDeploymentControllerTest {
 
         simulateSubmitAndSuccessfulJobStart(deploymentA);
 
-        // 2. Finalize the Blue deployment
+        // 2. Mark the Blue deployment ready
         rs = reconcile(rs.deployment);
 
         assertTrue(rs.updateControl.isPatchStatus());
+        assertTrue(rs.reconciledStatus.getDeploymentReadyTimestamp() > 0);
         assertEquals(
                 SpecUtils.serializeObject(bgSpecBefore, "spec"),
                 rs.reconciledStatus.getLastReconciledSpec());
+
+        // 3. Finalize the Blue deployment
+        minReconciliationTs = System.currentTimeMillis() - 1;
+        rs = reconcile(rs.deployment);
+
+        assertEquals(JobStatus.RUNNING, rs.reconciledStatus.getJobStatus().getState());
+        assertTrue(minReconciliationTs < rs.reconciledStatus.getLastReconciledTimestamp());
+        assertEquals(0, rs.reconciledStatus.getDeploymentReadyTimestamp());
         assertEquals(
                 FlinkBlueGreenDeploymentState.ACTIVE_BLUE, rs.reconciledStatus.getBlueGreenState());
-        assertEquals(JobStatus.RUNNING, rs.reconciledStatus.getJobStatus().getState());
+
+        // 4. Subsequent reconciliation calls = NO-OP
+        rs = reconcile(rs.deployment);
+        assertTrue(rs.updateControl.isNoUpdate());
     }
 
     @ParameterizedTest
@@ -151,8 +165,12 @@ public class FlinkBlueGreenDeploymentControllerTest {
         // 1. Initiate the Blue deployment
         var rs = reconcile(blueGreenDeployment);
 
-        // 2. Finalize the Blue deployment
+        // 2. Mark the Blue deployment ready
         simulateSubmitAndSuccessfulJobStart(getFlinkDeployments().get(0));
+        rs = reconcile(rs.deployment);
+        assertTrue(rs.reconciledStatus.getDeploymentReadyTimestamp() > 0);
+
+        // 3. Finalize the Blue deployment
         rs = reconcile(rs.deployment);
 
         // Verify noUpdate if reconciliation is triggered without a spec change
@@ -161,23 +179,22 @@ public class FlinkBlueGreenDeploymentControllerTest {
 
         // 3. Simulate a change in the spec to trigger a Green deployment
         String customValue = UUID.randomUUID().toString();
-        simulateChangeInSpec(rs.deployment, customValue);
+        simulateChangeInSpec(rs.deployment, customValue, ALT_DELAY_VALUE);
 
-        // 4. Initiate the Green deployment
+        // 4. Transitioning to the Green deployment
         var bgUpdatedSpec = rs.deployment.getSpec();
-        Long minReconciliationTs = System.currentTimeMillis() - 1;
-        rs = reconcile(rs.deployment);
-
-        testTransitionToGreen(rs, minReconciliationTs, customValue, bgUpdatedSpec);
+        testTransitionToGreen(rs, customValue, bgUpdatedSpec);
     }
 
     private void testTransitionToGreen(
             TestingFlinkBlueGreenDeploymentController.BlueGreenReconciliationResult rs,
-            Long minReconciliationTs,
             String customValue,
             FlinkBlueGreenDeploymentSpec bgUpdatedSpec)
             throws Exception {
-        TestingFlinkBlueGreenDeploymentController.BlueGreenReconciliationResult rs2;
+        // Initiating Green deployment
+        Long minReconciliationTs = System.currentTimeMillis() - 1;
+        rs = reconcile(rs.deployment);
+
         var flinkDeployments = getFlinkDeployments();
         var greenDeploymentName = flinkDeployments.get(1).getMetadata().getName();
 
@@ -201,19 +218,34 @@ public class FlinkBlueGreenDeploymentControllerTest {
                         .get(CUSTOM_CONFIG_FIELD));
         assertNotNull(rs.reconciledStatus.getLastReconciledSpec());
 
-        // New Blue deployment successfully started
+        // New Green deployment successfully started
         simulateSuccessfulJobStart(getFlinkDeployments().get(1));
-        rs2 = reconcile(rs.deployment);
+
+        // New Green deployment marked ready
+        rs = reconcile(rs.deployment);
+        assertEquals(ALT_DELAY_VALUE, rs.updateControl.getScheduleDelay().get());
+
+        // Subsequent reconciliation calls = NO-OP and the delay to delete should be decreasing
+        var rs2 = reconcile(rs.deployment);
         assertTrue(rs2.updateControl.isNoUpdate());
+        Long currentDelay = rs2.updateControl.getScheduleDelay().get();
+        assertTrue(currentDelay < ALT_DELAY_VALUE && currentDelay > 0);
+
+        Thread.sleep(ALT_DELAY_VALUE);
+
+        // Calling the rescheduled reconciliation (will delete the deployment)
+        reconcile(rs.deployment);
 
         // Old Blue deployment deleted, Green is the active one
         flinkDeployments = getFlinkDeployments();
         assertEquals(1, flinkDeployments.size());
         assertEquals(greenDeploymentName, flinkDeployments.get(0).getMetadata().getName());
 
+        minReconciliationTs = System.currentTimeMillis() - 1;
         rs = reconcile(rs.deployment);
 
         assertTrue(rs.updateControl.isPatchStatus());
+        assertTrue(minReconciliationTs < rs.reconciledStatus.getLastReconciledTimestamp());
         assertNotNull(rs.reconciledStatus.getLastReconciledSpec());
         assertEquals(
                 SpecUtils.serializeObject(bgUpdatedSpec, "spec"),
@@ -235,12 +267,15 @@ public class FlinkBlueGreenDeploymentControllerTest {
         // 1. Initiate the Green deployment
         var rs = reconcile(blueGreenDeployment);
 
-        // 2. Finalize the Green deployment
+        // 2a. Mark the Green deployment ready
         simulateSubmitAndSuccessfulJobStart(getFlinkDeployments().get(0));
         rs = reconcile(rs.deployment);
 
+        // 2b. Finalizing the Green deployment
+        rs = reconcile(rs.deployment);
+
         // 3. Simulate a change in the spec to trigger a Blue deployment
-        simulateChangeInSpec(rs.deployment, UUID.randomUUID().toString());
+        simulateChangeInSpec(rs.deployment, UUID.randomUUID().toString(), 0);
 
         // Simulate a failure in the running deployment
         simulateJobFailure(getFlinkDeployments().get(0));
@@ -287,13 +322,16 @@ public class FlinkBlueGreenDeploymentControllerTest {
         // 1. Initiate the Green deployment
         var rs = reconcile(blueGreenDeployment);
 
-        // 2. Finalize the Green deployment
+        // 2a. Mark the Green deployment ready
         simulateSubmitAndSuccessfulJobStart(getFlinkDeployments().get(0));
+        rs = reconcile(rs.deployment);
+
+        // 2b. Finalize the Green deployment
         rs = reconcile(rs.deployment);
 
         // 3. Simulate a change in the spec to trigger a Blue deployment
         String customValue = UUID.randomUUID().toString();
-        simulateChangeInSpec(rs.deployment, customValue);
+        simulateChangeInSpec(rs.deployment, customValue, 0);
 
         // 4. Initiate the Blue deployment
         rs = reconcile(rs.deployment);
@@ -351,14 +389,11 @@ public class FlinkBlueGreenDeploymentControllerTest {
 
         // 5. Simulate another change in the spec to trigger a redeployment
         customValue = UUID.randomUUID().toString();
-        simulateChangeInSpec(rs.deployment, customValue);
+        simulateChangeInSpec(rs.deployment, customValue, ALT_DELAY_VALUE);
 
         // 6. Initiate the redeployment
         var bgUpdatedSpec = rs.deployment.getSpec();
-        var minReconciliationTs = System.currentTimeMillis() - 1;
-        rs = reconcile(rs.deployment);
-
-        testTransitionToGreen(rs, minReconciliationTs, customValue, bgUpdatedSpec);
+        testTransitionToGreen(rs, customValue, bgUpdatedSpec);
     }
 
     @ParameterizedTest
@@ -375,7 +410,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
         simulateSubmitAndSuccessfulJobStart(getFlinkDeployments().get(0));
 
         // 3. Simulate a spec change before the transition is complete
-        simulateChangeInSpec(rs.deployment, "MODIFIED_VALUE");
+        simulateChangeInSpec(rs.deployment, "MODIFIED_VALUE", 0);
         rs = reconcile(rs.deployment);
 
         // The spec should have been reverted
@@ -385,10 +420,19 @@ public class FlinkBlueGreenDeploymentControllerTest {
     }
 
     private void simulateChangeInSpec(
-            FlinkBlueGreenDeployment blueGreenDeployment, String customValue) {
-        FlinkDeploymentSpec spec = blueGreenDeployment.getSpec().getTemplate().getSpec();
-        spec.getFlinkConfiguration().put(CUSTOM_CONFIG_FIELD, customValue);
-        blueGreenDeployment.getSpec().getTemplate().setSpec(spec);
+            FlinkBlueGreenDeployment blueGreenDeployment,
+            String customFieldValue,
+            int customDeletionDelayMs) {
+        FlinkDeploymentTemplateSpec template = blueGreenDeployment.getSpec().getTemplate();
+
+        if (customDeletionDelayMs > 0) {
+            template.setDeploymentDeletionDelayMs(customDeletionDelayMs);
+        }
+
+        FlinkDeploymentSpec spec = template.getSpec();
+        spec.getFlinkConfiguration().put(CUSTOM_CONFIG_FIELD, customFieldValue);
+
+        template.setSpec(spec);
         kubernetesClient.resource(blueGreenDeployment).createOrReplace();
     }
 
@@ -504,9 +548,9 @@ public class FlinkBlueGreenDeploymentControllerTest {
 
         var flinkDeploymentTemplateSpec =
                 FlinkDeploymentTemplateSpec.builder()
-                        .deploymentDeletionDelaySec(1)
+                        .deploymentDeletionDelayMs(1)
                         .maxNumRetries(1)
-                        .reconciliationReschedulingIntervalMs(2000)
+                        .reconciliationReschedulingIntervalMs(500)
                         .spec(flinkDeploymentSpec)
                         .build();
 
