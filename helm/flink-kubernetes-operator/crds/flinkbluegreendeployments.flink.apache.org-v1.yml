@@ -27,9 +27,9 @@ spec:
             properties:
               template:
                 properties:
-                  deploymentDeletionDelayMs:
+                  abortGracePeriodMs:
                     type: integer
-                  maxNumRetries:
+                  deploymentDeletionDelayMs:
                     type: integer
                   metadata:
                     properties:
@@ -10307,6 +10307,8 @@ spec:
             type: object
           status:
             properties:
+              abortTimestamp:
+                type: integer
               blueGreenState:
                 enum:
                 - ACTIVE_BLUE
@@ -10456,8 +10458,6 @@ spec:
               lastReconciledSpec:
                 type: string
               lastReconciledTimestamp:
-                type: integer
-              numRetries:
                 type: integer
               taskManager:
                 properties:

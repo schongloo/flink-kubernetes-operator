@@ -273,7 +273,8 @@ public class FlinkBlueGreenDeploymentControllerTest {
                 FlinkBlueGreenDeploymentState.ACTIVE_GREEN,
                 rs.reconciledStatus.getBlueGreenState());
         assertEquals(JobStatus.RUNNING, rs.reconciledStatus.getJobStatus().getState());
-        assertTrue(rs.updateControl.isPatchStatus());
+        assertEquals(0, rs.reconciledStatus.getDeploymentReadyTimestamp());
+        assertEquals(0, rs.reconciledStatus.getAbortTimestamp());
     }
 
     @ParameterizedTest
@@ -319,9 +320,9 @@ public class FlinkBlueGreenDeploymentControllerTest {
                 buildSessionCluster(TEST_DEPLOYMENT_NAME, TEST_NAMESPACE, flinkVersion);
 
         // Overriding the maxNumRetries and Reschedule Interval
-        var maxNumRetries = 2;
+        var abortGracePeriodMs = 1200;
         var reconciliationReschedulingIntervalMs = 5000;
-        blueGreenDeployment.getSpec().getTemplate().setMaxNumRetries(maxNumRetries);
+        blueGreenDeployment.getSpec().getTemplate().setAbortGracePeriodMs(abortGracePeriodMs);
         blueGreenDeployment
                 .getSpec()
                 .getTemplate()
@@ -350,19 +351,19 @@ public class FlinkBlueGreenDeploymentControllerTest {
                         .get(CUSTOM_CONFIG_FIELD));
 
         // Simulating the Blue deployment doesn't start correctly (status will remain the same)
-        //  Asserting the status retry count is incremented by 1
-        for (int i = 1; i <= maxNumRetries; i++) {
-            Thread.sleep(1);
+        Long reschedDelayMs = 0L;
+        for (int i = 0; i < 2; i++) {
             rs = reconcile(rs.deployment);
             assertTrue(rs.updateControl.isPatchStatus());
             assertFalse(rs.updateControl.isUpdateResource());
             assertTrue(rs.updateControl.getScheduleDelay().isPresent());
-            assertEquals(
-                    reconciliationReschedulingIntervalMs,
-                    rs.updateControl.getScheduleDelay().get());
-            assertEquals(i, rs.reconciledStatus.getNumRetries());
-            System.out.println();
+            reschedDelayMs = rs.updateControl.getScheduleDelay().get();
+            assertTrue(reschedDelayMs < abortGracePeriodMs && reschedDelayMs > 0);
+            assertTrue(rs.reconciledStatus.getAbortTimestamp() > System.currentTimeMillis());
         }
+
+        // Wait until the delay
+        Thread.sleep(reschedDelayMs);
 
         // After the retries are exhausted
         rs = reconcile(rs.deployment);
@@ -381,11 +382,13 @@ public class FlinkBlueGreenDeploymentControllerTest {
         assertEquals(
                 ReconciliationState.DEPLOYED,
                 flinkDeployments.get(0).getStatus().getReconciliationStatus().getState());
-        assertEquals(
-                JobStatus.SUSPENDED, flinkDeployments.get(1).getStatus().getJobStatus().getState());
+        // The B/G controller changes the State = SUSPENDED, the action is done by the
+        // FlinkDeploymentController
+        assertEquals(JobState.SUSPENDED, flinkDeployments.get(1).getSpec().getJob().getState());
         assertEquals(
                 ReconciliationState.UPGRADING,
                 flinkDeployments.get(1).getStatus().getReconciliationStatus().getState());
+        assertTrue(rs.reconciledStatus.getAbortTimestamp() > 0);
 
         // Simulate another change in the spec to trigger a redeployment
         customValue = UUID.randomUUID().toString();
@@ -549,7 +552,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
         var flinkDeploymentTemplateSpec =
                 FlinkDeploymentTemplateSpec.builder()
                         .deploymentDeletionDelayMs(DEFAULT_DELETION_DELAY_VALUE)
-                        .maxNumRetries(1)
+                        .abortGracePeriodMs(1)
                         .reconciliationReschedulingIntervalMs(500)
                         .spec(flinkDeploymentSpec)
                         .build();

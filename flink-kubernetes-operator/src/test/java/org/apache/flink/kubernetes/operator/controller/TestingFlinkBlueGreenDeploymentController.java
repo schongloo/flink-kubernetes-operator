@@ -53,6 +53,7 @@ public class TestingFlinkBlueGreenDeploymentController
                         null);
 
         flinkBlueGreenDeploymentController = new FlinkBlueGreenDeploymentController(contextFactory);
+        flinkBlueGreenDeploymentController.minimumAbortGracePeriodMs = 1000;
     }
 
     @Override

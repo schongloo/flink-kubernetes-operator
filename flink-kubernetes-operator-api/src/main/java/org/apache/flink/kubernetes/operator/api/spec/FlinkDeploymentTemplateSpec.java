@@ -43,8 +43,8 @@ public class FlinkDeploymentTemplateSpec {
     @JsonProperty("deploymentDeletionDelayMs")
     private int deploymentDeletionDelayMs;
 
-    @JsonProperty("maxNumRetries")
-    private int maxNumRetries;
+    @JsonProperty("abortGracePeriodMs")
+    private int abortGracePeriodMs;
 
     @JsonProperty("reconciliationReschedulingIntervalMs")
     private int reconciliationReschedulingIntervalMs;

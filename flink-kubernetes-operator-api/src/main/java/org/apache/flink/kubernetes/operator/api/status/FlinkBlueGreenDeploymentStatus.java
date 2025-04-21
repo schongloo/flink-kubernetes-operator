@@ -47,8 +47,8 @@ public class FlinkBlueGreenDeploymentStatus {
     /** Timestamp of last reconciliation. */
     private Long lastReconciledTimestamp;
 
-    /** Current number of retries. */
-    private int numRetries;
+    /** Computed from abortGracePeriodMs, timestamp after which the deployment should be aborted. */
+    private long abortTimestamp;
 
     /** Timestamp when the deployment became READY/STABLE. Used to determine when to delete it. */
     private long deploymentReadyTimestamp;
