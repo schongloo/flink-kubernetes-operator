@@ -34,6 +34,17 @@ class FlinkBlueGreenDeployments {
     private FlinkDeployment flinkDeploymentBlue;
     private FlinkDeployment flinkDeploymentGreen;
 
+    public int getNumberOfDeployments() {
+        var counter = 0;
+        if (flinkDeploymentBlue != null) {
+            counter++;
+        }
+        if (flinkDeploymentGreen != null) {
+            counter++;
+        }
+        return counter;
+    }
+
     static FlinkBlueGreenDeployments fromSecondaryResources(
             Context<FlinkBlueGreenDeployment> context) {
         Set<FlinkDeployment> secondaryResources =

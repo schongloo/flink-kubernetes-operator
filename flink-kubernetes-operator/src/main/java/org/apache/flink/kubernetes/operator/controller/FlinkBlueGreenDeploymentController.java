@@ -102,6 +102,58 @@ public class FlinkBlueGreenDeploymentController
 
         if (deploymentStatus == null) {
             deploymentStatus = new FlinkBlueGreenDeploymentStatus();
+            return patchStatusUpdateControl(
+                            bgDeployment,
+                            deploymentStatus,
+                            FlinkBlueGreenDeploymentState.INITIALIZING_BLUE,
+                            null)
+                    .rescheduleAfter(100);
+        } else {
+            switch (deploymentStatus.getBlueGreenState()) {
+                case INITIALIZING_BLUE:
+                    return checkFirstDeployment(bgDeployment, josdkContext, deploymentStatus);
+                case ACTIVE_BLUE:
+                    return checkAndInitiateDeployment(
+                            bgDeployment,
+                            FlinkBlueGreenDeployments.fromSecondaryResources(josdkContext),
+                            deploymentStatus,
+                            DeploymentType.BLUE,
+                            josdkContext);
+                case ACTIVE_GREEN:
+                    return checkAndInitiateDeployment(
+                            bgDeployment,
+                            FlinkBlueGreenDeployments.fromSecondaryResources(josdkContext),
+                            deploymentStatus,
+                            DeploymentType.GREEN,
+                            josdkContext);
+                case TRANSITIONING_TO_BLUE:
+                    return monitorTransition(
+                            bgDeployment,
+                            FlinkBlueGreenDeployments.fromSecondaryResources(josdkContext),
+                            deploymentStatus,
+                            DeploymentType.GREEN,
+                            josdkContext);
+                case TRANSITIONING_TO_GREEN:
+                    return monitorTransition(
+                            bgDeployment,
+                            FlinkBlueGreenDeployments.fromSecondaryResources(josdkContext),
+                            deploymentStatus,
+                            DeploymentType.BLUE,
+                            josdkContext);
+                default:
+                    return UpdateControl.noUpdate();
+            }
+        }
+    }
+
+    private UpdateControl<FlinkBlueGreenDeployment> checkFirstDeployment(
+            FlinkBlueGreenDeployment bgDeployment,
+            Context<FlinkBlueGreenDeployment> josdkContext,
+            FlinkBlueGreenDeploymentStatus deploymentStatus)
+            throws JsonProcessingException {
+        if (deploymentStatus.getLastReconciledSpec() == null
+                || hasSpecChanged(bgDeployment.getSpec(), deploymentStatus)) {
+            // Ack the change in the spec (setLastReconciledSpec)
             setLastReconciledSpec(bgDeployment, deploymentStatus);
             return initiateDeployment(
                     bgDeployment,
@@ -112,41 +164,7 @@ public class FlinkBlueGreenDeploymentController
                     josdkContext,
                     true);
         } else {
-            FlinkBlueGreenDeployments deployments =
-                    FlinkBlueGreenDeployments.fromSecondaryResources(josdkContext);
-
-            switch (deploymentStatus.getBlueGreenState()) {
-                case ACTIVE_BLUE:
-                    return checkAndInitiateDeployment(
-                            bgDeployment,
-                            deployments,
-                            deploymentStatus,
-                            DeploymentType.BLUE,
-                            josdkContext);
-                case ACTIVE_GREEN:
-                    return checkAndInitiateDeployment(
-                            bgDeployment,
-                            deployments,
-                            deploymentStatus,
-                            DeploymentType.GREEN,
-                            josdkContext);
-                case TRANSITIONING_TO_BLUE:
-                    return monitorTransition(
-                            bgDeployment,
-                            deployments,
-                            deploymentStatus,
-                            DeploymentType.GREEN,
-                            josdkContext);
-                case TRANSITIONING_TO_GREEN:
-                    return monitorTransition(
-                            bgDeployment,
-                            deployments,
-                            deploymentStatus,
-                            DeploymentType.BLUE,
-                            josdkContext);
-                default:
-                    return UpdateControl.noUpdate();
-            }
+            return UpdateControl.noUpdate();
         }
     }
 
@@ -204,7 +222,12 @@ public class FlinkBlueGreenDeploymentController
                     bgDeployment, deploymentStatus, josdkContext, currentDeployment, nextState);
         } else {
             return shouldAbort(
-                    bgDeployment, deploymentStatus, josdkContext, nextDeployment, nextState);
+                    bgDeployment,
+                    deploymentStatus,
+                    josdkContext,
+                    nextDeployment,
+                    nextState,
+                    deployments);
         }
     }
 
@@ -246,7 +269,8 @@ public class FlinkBlueGreenDeploymentController
             FlinkBlueGreenDeploymentStatus deploymentStatus,
             Context<FlinkBlueGreenDeployment> josdkContext,
             FlinkDeployment nextDeployment,
-            FlinkBlueGreenDeploymentState nextState) {
+            FlinkBlueGreenDeploymentState nextState,
+            FlinkBlueGreenDeployments deployments) {
 
         String deploymentName = nextDeployment.getMetadata().getName();
         long abortTimestamp = deploymentStatus.getAbortTimestamp();
@@ -263,10 +287,17 @@ public class FlinkBlueGreenDeploymentController
 
             // We indicate this Blue/Green deployment is no longer Transitioning
             //  and rollback the state value
-            var previousState =
-                    nextState == FlinkBlueGreenDeploymentState.ACTIVE_BLUE
-                            ? FlinkBlueGreenDeploymentState.ACTIVE_GREEN
-                            : FlinkBlueGreenDeploymentState.ACTIVE_BLUE;
+            FlinkBlueGreenDeploymentState previousState;
+            if (deployments.getNumberOfDeployments() == 1) {
+                previousState = FlinkBlueGreenDeploymentState.INITIALIZING_BLUE;
+            } else if (deployments.getNumberOfDeployments() == 2) {
+                previousState =
+                        nextState == FlinkBlueGreenDeploymentState.ACTIVE_BLUE
+                                ? FlinkBlueGreenDeploymentState.ACTIVE_GREEN
+                                : FlinkBlueGreenDeploymentState.ACTIVE_BLUE;
+            } else {
+                throw new IllegalStateException("No blue/green FlinkDeployments found!");
+            }
 
             deploymentStatus.setBlueGreenState(previousState);
 
@@ -447,7 +478,7 @@ public class FlinkBlueGreenDeploymentController
 
     private static Savepoint configureSavepoint(
             FlinkResourceContext<FlinkDeployment> resourceContext) throws Exception {
-        // TODO: if the user specified an initialSavepointPath, use it and skip this
+        // TODO: if the user specified an initialSavepointPath, use it and skip this?
         Optional<Savepoint> lastCheckpoint =
                 resourceContext
                         .getFlinkService()
@@ -460,7 +491,7 @@ public class FlinkBlueGreenDeploymentController
                                                 .getJobId()),
                                 resourceContext.getObserveConfig());
 
-        // TODO: alternative action if no checkpoint is available?
+        // Alternative action if no checkpoint is available?
         if (lastCheckpoint.isEmpty()) {
             throw new IllegalStateException(
                     "Last Checkpoint for Job "
@@ -484,7 +515,8 @@ public class FlinkBlueGreenDeploymentController
 
         setAbortTimestamp(bgDeployment, deploymentStatus);
 
-        return patchStatusUpdateControl(bgDeployment, deploymentStatus, nextState, null)
+        return patchStatusUpdateControl(
+                        bgDeployment, deploymentStatus, nextState, JobStatus.RECONCILING)
                 .rescheduleAfter(getReconciliationReschedInterval(bgDeployment));
     }
 

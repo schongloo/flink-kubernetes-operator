@@ -10313,6 +10313,7 @@ spec:
                 enum:
                 - ACTIVE_BLUE
                 - ACTIVE_GREEN
+                - INITIALIZING_BLUE
                 - TRANSITIONING_TO_BLUE
                 - TRANSITIONING_TO_GREEN
                 type: string

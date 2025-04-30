@@ -41,7 +41,7 @@ public class TestingFlinkBlueGreenDeploymentController
 
     @Getter private TestingFlinkResourceContextFactory contextFactory;
 
-    private FlinkBlueGreenDeploymentController flinkBlueGreenDeploymentController;
+    public final FlinkBlueGreenDeploymentController flinkBlueGreenDeploymentController;
 
     public TestingFlinkBlueGreenDeploymentController(
             FlinkConfigManager configManager, TestingFlinkService flinkService) {
