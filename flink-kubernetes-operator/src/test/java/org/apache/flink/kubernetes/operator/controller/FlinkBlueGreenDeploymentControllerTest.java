@@ -24,6 +24,7 @@ import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.kubernetes.operator.TestingFlinkService;
 import org.apache.flink.kubernetes.operator.api.FlinkBlueGreenDeployment;
 import org.apache.flink.kubernetes.operator.api.FlinkDeployment;
+import org.apache.flink.kubernetes.operator.api.bluegreen.TransitionMode;
 import org.apache.flink.kubernetes.operator.api.spec.FlinkBlueGreenDeploymentSpec;
 import org.apache.flink.kubernetes.operator.api.spec.FlinkDeploymentSpec;
 import org.apache.flink.kubernetes.operator.api.spec.FlinkDeploymentTemplateSpec;
@@ -53,6 +54,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import javax.naming.OperationNotSupportedException;
+
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
@@ -66,6 +69,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** {@link FlinkBlueGreenDeploymentController} tests. */
@@ -280,7 +284,6 @@ public class FlinkBlueGreenDeploymentControllerTest {
                 buildSessionCluster(TEST_DEPLOYMENT_NAME, TEST_NAMESPACE, flinkVersion);
 
         // Initiate the Blue deployment
-        var originalSpec = blueGreenDeployment.getSpec();
         var rs = initialPhaseBasicDeployment(blueGreenDeployment, false);
 
         // Simulating the job did not start correctly before the AbortGracePeriodMs
@@ -317,6 +320,20 @@ public class FlinkBlueGreenDeploymentControllerTest {
         assertEquals(
                 FlinkBlueGreenDeploymentState.TRANSITIONING_TO_BLUE,
                 rs.reconciledStatus.getBlueGreenState());
+    }
+
+    // TODO: this test is only for FLIP-503, remove later.
+    @ParameterizedTest
+    @MethodSource("org.apache.flink.kubernetes.operator.TestUtils#flinkVersions")
+    public void verifyOnlyBasicTransitionIsAllowed(FlinkVersion flinkVersion) throws Exception {
+        var blueGreenDeployment =
+                buildSessionCluster(TEST_DEPLOYMENT_NAME, TEST_NAMESPACE, flinkVersion);
+
+        blueGreenDeployment.getSpec().getTemplate().setTransitionMode(null);
+        assertThrows(OperationNotSupportedException.class, () -> reconcile(blueGreenDeployment));
+
+        blueGreenDeployment.getSpec().getTemplate().setTransitionMode(TransitionMode.ADVANCED);
+        assertThrows(OperationNotSupportedException.class, () -> reconcile(blueGreenDeployment));
     }
 
     private TestingFlinkBlueGreenDeploymentController.BlueGreenReconciliationResult
@@ -372,6 +389,12 @@ public class FlinkBlueGreenDeploymentControllerTest {
             initialPhaseBasicDeployment(
                     FlinkBlueGreenDeployment blueGreenDeployment, boolean execAssertions)
                     throws Exception {
+        if (blueGreenDeployment.getSpec().getTemplate().getTransitionMode()
+                != TransitionMode.BASIC) {
+            throw new OperationNotSupportedException(
+                    "Only TransitionMode == BASIC is currently supported");
+        }
+
         Long minReconciliationTs = System.currentTimeMillis() - 1;
 
         // 1a. Initializing deploymentStatus with this call
@@ -594,6 +617,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
                                 .state(JobState.RUNNING)
                                 .build());
 
+        bgDeploymentSpec.getTemplate().setTransitionMode(TransitionMode.BASIC);
         deployment.setSpec(bgDeploymentSpec);
         return deployment;
     }

@@ -22,6 +22,7 @@ import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.kubernetes.operator.api.FlinkBlueGreenDeployment;
 import org.apache.flink.kubernetes.operator.api.FlinkDeployment;
 import org.apache.flink.kubernetes.operator.api.bluegreen.DeploymentType;
+import org.apache.flink.kubernetes.operator.api.bluegreen.TransitionMode;
 import org.apache.flink.kubernetes.operator.api.lifecycle.ResourceLifecycleState;
 import org.apache.flink.kubernetes.operator.api.spec.FlinkBlueGreenDeploymentSpec;
 import org.apache.flink.kubernetes.operator.api.spec.JobState;
@@ -53,6 +54,8 @@ import io.javaoperatorsdk.operator.processing.event.source.informer.InformerEven
 import io.javaoperatorsdk.operator.processing.event.source.informer.Mappers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.naming.OperationNotSupportedException;
 
 import java.time.Instant;
 import java.util.List;
@@ -97,6 +100,12 @@ public class FlinkBlueGreenDeploymentController
     public UpdateControl<FlinkBlueGreenDeployment> reconcile(
             FlinkBlueGreenDeployment bgDeployment, Context<FlinkBlueGreenDeployment> josdkContext)
             throws Exception {
+
+        // TODO: this verification is only for FLIP-503, remove later.
+        if (bgDeployment.getSpec().getTemplate().getTransitionMode() != TransitionMode.BASIC) {
+            throw new OperationNotSupportedException(
+                    "Only TransitionMode == BASIC is currently supported");
+        }
 
         FlinkBlueGreenDeploymentStatus deploymentStatus = bgDeployment.getStatus();
 
@@ -568,6 +577,9 @@ public class FlinkBlueGreenDeploymentController
 
         String lastReconciledSpec = deploymentStatus.getLastReconciledSpec();
         String newSpecSerialized = SpecUtils.serializeObject(newSpec, "spec");
+
+        // TODO: in FLIP-504 check here the TransitionMode has not been changed
+
         return !lastReconciledSpec.equals(newSpecSerialized);
     }
 
