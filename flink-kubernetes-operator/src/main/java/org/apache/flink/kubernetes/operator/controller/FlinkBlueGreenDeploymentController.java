@@ -207,7 +207,7 @@ public class FlinkBlueGreenDeploymentController
                         + ", current deployment type: "
                         + currentDeploymentType);
 
-        if (isDeploymentReady(nextDeployment, josdkContext, deploymentStatus)) {
+        if (isDeploymentReady(nextDeployment)) {
             return canDelete(
                     bgDeployment, deploymentStatus, josdkContext, currentDeployment, nextState);
         } else {
@@ -366,7 +366,7 @@ public class FlinkBlueGreenDeploymentController
                             ? deployments.getFlinkDeploymentBlue()
                             : deployments.getFlinkDeploymentGreen();
 
-            if (isDeploymentReady(currentFlinkDeployment, josdkContext, deploymentStatus)) {
+            if (isDeploymentReady(currentFlinkDeployment)) {
 
                 DeploymentType nextDeploymentType = DeploymentType.BLUE;
                 FlinkBlueGreenDeploymentState nextState =
@@ -455,10 +455,7 @@ public class FlinkBlueGreenDeploymentController
                 .rescheduleAfter(getReconciliationReschedInterval(bgDeployment));
     }
 
-    private boolean isDeploymentReady(
-            FlinkDeployment deployment,
-            Context<FlinkBlueGreenDeployment> josdkContext,
-            FlinkBlueGreenDeploymentStatus deploymentStatus) {
+    private boolean isDeploymentReady(FlinkDeployment deployment) {
         return ResourceLifecycleState.STABLE == deployment.getStatus().getLifecycleState()
                 && JobStatus.RUNNING == deployment.getStatus().getJobStatus().getState();
     }
