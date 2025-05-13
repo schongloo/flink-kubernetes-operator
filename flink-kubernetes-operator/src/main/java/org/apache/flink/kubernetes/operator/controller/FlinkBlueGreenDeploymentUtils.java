@@ -52,8 +52,8 @@ public class FlinkBlueGreenDeploymentUtils {
             String wrapperKey,
             Class<T> valueType)
             throws JsonProcessingException {
-        String serializedSpec = SpecUtils.serializeObject(spec, wrapperKey);
+        String serializedSpec = SpecUtils.writeSpecAsJSON(spec, wrapperKey);
         String replacedSerializedSpec = serializedSpec.replace(deploymentName, childDeploymentName);
-        return SpecUtils.deserializeObject(replacedSerializedSpec, wrapperKey, valueType);
+        return SpecUtils.readSpecFromJSON(replacedSerializedSpec, wrapperKey, valueType);
     }
 }

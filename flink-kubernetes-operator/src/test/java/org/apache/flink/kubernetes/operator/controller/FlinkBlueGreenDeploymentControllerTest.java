@@ -269,8 +269,8 @@ public class FlinkBlueGreenDeploymentControllerTest {
 
         // The spec should have been reverted
         assertEquals(
-                SpecUtils.serializeObject(originalSpec, "spec"),
-                SpecUtils.serializeObject(rs.deployment.getSpec(), "spec"));
+                SpecUtils.writeSpecAsJSON(originalSpec, "spec"),
+                SpecUtils.writeSpecAsJSON(rs.deployment.getSpec(), "spec"));
     }
 
     @ParameterizedTest
@@ -414,7 +414,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
         assertEquals(expectedDeletionDelay, deletionDelay);
         assertTrue(rs.reconciledStatus.getDeploymentReadyTimestamp() > 0);
         assertEquals(
-                SpecUtils.serializeObject(bgSpecBefore, "spec"),
+                SpecUtils.writeSpecAsJSON(bgSpecBefore, "spec"),
                 rs.reconciledStatus.getLastReconciledSpec());
 
         // A reconciliation before the deletion delay has expired should result in no-op
@@ -482,7 +482,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
         assertTrue(minReconciliationTs < rs.reconciledStatus.getLastReconciledTimestamp());
         assertNotNull(rs.reconciledStatus.getLastReconciledSpec());
         assertEquals(
-                SpecUtils.serializeObject(bgUpdatedSpec, "spec"),
+                SpecUtils.writeSpecAsJSON(bgUpdatedSpec, "spec"),
                 rs.reconciledStatus.getLastReconciledSpec());
         assertEquals(
                 FlinkBlueGreenDeploymentState.ACTIVE_GREEN,

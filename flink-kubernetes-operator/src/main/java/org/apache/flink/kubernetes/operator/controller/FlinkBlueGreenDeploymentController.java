@@ -178,7 +178,7 @@ public class FlinkBlueGreenDeploymentController
             // this means the spec was changed during transition,
             //  ignore the new change, revert the spec and log as warning
             bgDeployment.setSpec(
-                    SpecUtils.deserializeObject(
+                    SpecUtils.readSpecFromJSON(
                             deploymentStatus.getLastReconciledSpec(),
                             "spec",
                             FlinkBlueGreenDeploymentSpec.class));
@@ -407,7 +407,7 @@ public class FlinkBlueGreenDeploymentController
             FlinkBlueGreenDeployment bgDeployment,
             FlinkBlueGreenDeploymentStatus deploymentStatus) {
         deploymentStatus.setLastReconciledSpec(
-                SpecUtils.serializeObject(bgDeployment.getSpec(), "spec"));
+                SpecUtils.writeSpecAsJSON(bgDeployment.getSpec(), "spec"));
         deploymentStatus.setLastReconciledTimestamp(System.currentTimeMillis());
     }
 
@@ -467,7 +467,7 @@ public class FlinkBlueGreenDeploymentController
             FlinkBlueGreenDeploymentSpec newSpec, FlinkBlueGreenDeploymentStatus deploymentStatus) {
 
         String lastReconciledSpec = deploymentStatus.getLastReconciledSpec();
-        String newSpecSerialized = SpecUtils.serializeObject(newSpec, "spec");
+        String newSpecSerialized = SpecUtils.writeSpecAsJSON(newSpec, "spec");
 
         return !lastReconciledSpec.equals(newSpecSerialized);
     }

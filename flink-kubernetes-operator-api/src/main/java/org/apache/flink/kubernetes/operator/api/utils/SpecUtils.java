@@ -99,7 +99,7 @@ public class SpecUtils {
         }
     }
 
-    public static String serializeObject(Object object, String wrapperKey) {
+    public static String writeSpecAsJSON(Object object, String wrapperKey) {
         ObjectNode wrapper = objectMapper.createObjectNode();
         wrapper.set(wrapperKey, objectMapper.valueToTree(checkNotNull(object)));
 
@@ -111,8 +111,7 @@ public class SpecUtils {
         }
     }
 
-    public static <T> T deserializeObject(String serialized, String wrapperKey, Class<T> valueType)
-            throws JsonProcessingException {
+    public static <T> T readSpecFromJSON(String serialized, String wrapperKey, Class<T> valueType) {
         try {
             ObjectNode wrapper = (ObjectNode) objectMapper.readTree(serialized);
             return objectMapper.treeToValue(wrapper.get(wrapperKey), valueType);
