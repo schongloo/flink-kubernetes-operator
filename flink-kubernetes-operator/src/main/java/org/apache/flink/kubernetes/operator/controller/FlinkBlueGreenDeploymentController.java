@@ -22,7 +22,6 @@ import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.kubernetes.operator.api.FlinkBlueGreenDeployment;
 import org.apache.flink.kubernetes.operator.api.FlinkDeployment;
 import org.apache.flink.kubernetes.operator.api.bluegreen.DeploymentType;
-import org.apache.flink.kubernetes.operator.api.bluegreen.TransitionMode;
 import org.apache.flink.kubernetes.operator.api.lifecycle.ResourceLifecycleState;
 import org.apache.flink.kubernetes.operator.api.spec.FlinkBlueGreenDeploymentSpec;
 import org.apache.flink.kubernetes.operator.api.spec.JobState;
@@ -33,15 +32,9 @@ import org.apache.flink.kubernetes.operator.api.utils.SpecUtils;
 import org.apache.flink.kubernetes.operator.service.FlinkResourceContextFactory;
 import org.apache.flink.util.Preconditions;
 
-import org.apache.flink.shaded.guava31.com.google.common.collect.ImmutableSet;
-
 import com.fasterxml.jackson.core.JsonProcessingException;
-import io.fabric8.kubernetes.api.model.Event;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
-import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.StatusDetails;
-import io.fabric8.kubernetes.client.dsl.PodResource;
-import io.fabric8.kubernetes.client.dsl.Resource;
 import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.ControllerConfiguration;
@@ -55,15 +48,9 @@ import io.javaoperatorsdk.operator.processing.event.source.informer.Mappers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.naming.OperationNotSupportedException;
-
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /** Controller that runs the main reconcile loop for Flink Blue/Green deployments. */
 @ControllerConfiguration
@@ -100,12 +87,6 @@ public class FlinkBlueGreenDeploymentController
     public UpdateControl<FlinkBlueGreenDeployment> reconcile(
             FlinkBlueGreenDeployment bgDeployment, Context<FlinkBlueGreenDeployment> josdkContext)
             throws Exception {
-
-        // TODO: this verification is only for FLIP-503, remove later.
-        if (bgDeployment.getSpec().getTemplate().getTransitionMode() != TransitionMode.BASIC) {
-            throw new OperationNotSupportedException(
-                    "Only TransitionMode == BASIC is currently supported");
-        }
 
         FlinkBlueGreenDeploymentStatus deploymentStatus = bgDeployment.getStatus();
 
@@ -430,61 +411,6 @@ public class FlinkBlueGreenDeploymentController
         deploymentStatus.setLastReconciledTimestamp(System.currentTimeMillis());
     }
 
-    public void logPotentialWarnings(
-            FlinkDeployment flinkDeployment,
-            Context<FlinkBlueGreenDeployment> josdkContext,
-            long lastReconciliationTimestamp) {
-        // Event reason constants
-        // https://github.com/kubernetes/kubernetes/blob/master/pkg/kubelet/events/event.go
-        Set<String> badEventPatterns =
-                ImmutableSet.of(
-                        "FAIL", "EXCEPTION", "BACKOFF", "ERROR", "EVICTION", "KILL", "EXCEED");
-        Set<String> goodPodPhases = ImmutableSet.of("PENDING", "RUNNING");
-
-        Set<String> podPhases =
-                getDeploymentPods(josdkContext, flinkDeployment)
-                        .map(p -> p.get().getStatus().getPhase().toUpperCase())
-                        .collect(Collectors.toSet());
-
-        podPhases.removeAll(goodPodPhases);
-
-        if (!podPhases.isEmpty()) {
-            LOG.warn("Deployment not healthy, some Pods have the following status: " + podPhases);
-        }
-
-        List<Event> abnormalEvents =
-                josdkContext
-                        .getClient()
-                        .v1()
-                        .events()
-                        .inNamespace(flinkDeployment.getMetadata().getNamespace())
-                        .resources()
-                        .map(Resource::item)
-                        .filter(e -> !e.getType().equalsIgnoreCase("NORMAL"))
-                        .filter(
-                                e ->
-                                        e.getInvolvedObject()
-                                                .getName()
-                                                .contains(flinkDeployment.getMetadata().getName()))
-                        .filter(
-                                e ->
-                                        Instant.parse(e.getLastTimestamp()).toEpochMilli()
-                                                > lastReconciliationTimestamp)
-                        .filter(
-                                e ->
-                                        badEventPatterns.stream()
-                                                .anyMatch(
-                                                        p ->
-                                                                e.getReason()
-                                                                        .toUpperCase()
-                                                                        .contains(p)))
-                        .collect(Collectors.toList());
-
-        if (!abnormalEvents.isEmpty()) {
-            LOG.warn("Abnormal events detected: " + abnormalEvents);
-        }
-    }
-
     private static Savepoint configureSavepoint(
             FlinkResourceContext<FlinkDeployment> resourceContext) throws Exception {
         // TODO: if the user specified an initialSavepointPath, use it and skip this?
@@ -533,43 +459,8 @@ public class FlinkBlueGreenDeploymentController
             FlinkDeployment deployment,
             Context<FlinkBlueGreenDeployment> josdkContext,
             FlinkBlueGreenDeploymentStatus deploymentStatus) {
-        if (ResourceLifecycleState.STABLE == deployment.getStatus().getLifecycleState()
-                && JobStatus.RUNNING == deployment.getStatus().getJobStatus().getState()) {
-            // TODO: checking for running pods seems to be redundant, check if this can be removed
-            int notRunningPods =
-                    (int)
-                            getDeploymentPods(josdkContext, deployment)
-                                    .filter(
-                                            p ->
-                                                    !p.get()
-                                                            .getStatus()
-                                                            .getPhase()
-                                                            .equalsIgnoreCase("RUNNING"))
-                                    .count();
-
-            if (notRunningPods > 0) {
-                LOG.warn("Waiting for " + notRunningPods + " Pods to transition to RUNNING status");
-            }
-
-            return notRunningPods == 0;
-        }
-
-        logPotentialWarnings(
-                deployment, josdkContext, deploymentStatus.getLastReconciledTimestamp());
-        return false;
-    }
-
-    private static Stream<PodResource> getDeploymentPods(
-            Context<FlinkBlueGreenDeployment> josdkContext, FlinkDeployment deployment) {
-        var namespace = deployment.getMetadata().getNamespace();
-        var deploymentName = deployment.getMetadata().getName();
-
-        return josdkContext
-                .getClient()
-                .pods()
-                .inNamespace(namespace)
-                .withLabel("app", deploymentName)
-                .resources();
+        return ResourceLifecycleState.STABLE == deployment.getStatus().getLifecycleState()
+                && JobStatus.RUNNING == deployment.getStatus().getJobStatus().getState();
     }
 
     private boolean hasSpecChanged(
@@ -577,8 +468,6 @@ public class FlinkBlueGreenDeploymentController
 
         String lastReconciledSpec = deploymentStatus.getLastReconciledSpec();
         String newSpecSerialized = SpecUtils.serializeObject(newSpec, "spec");
-
-        // TODO: in FLIP-504 check here the TransitionMode has not been changed
 
         return !lastReconciledSpec.equals(newSpecSerialized);
     }
@@ -620,7 +509,7 @@ public class FlinkBlueGreenDeploymentController
                 bgMeta.getName() + "-" + deploymentType.toString().toLowerCase();
 
         FlinkBlueGreenDeploymentSpec adjustedSpec =
-                adjustNameReferences(
+                FlinkBlueGreenDeploymentUtils.adjustNameReferences(
                         spec,
                         bgMeta.getName(),
                         childDeploymentName,
@@ -636,7 +525,8 @@ public class FlinkBlueGreenDeploymentController
         flinkDeployment.setSpec(adjustedSpec.getTemplate().getSpec());
 
         // Deployment metadata
-        ObjectMeta flinkDeploymentMeta = getDependentObjectMeta(bgDeployment);
+        ObjectMeta flinkDeploymentMeta =
+                FlinkBlueGreenDeploymentUtils.getDependentObjectMeta(bgDeployment);
         flinkDeploymentMeta.setName(childDeploymentName);
         flinkDeploymentMeta.setLabels(
                 Map.of(deploymentType.getClass().getSimpleName(), deploymentType.toString()));
@@ -668,36 +558,7 @@ public class FlinkBlueGreenDeploymentController
         }
     }
 
-    private ObjectMeta getDependentObjectMeta(FlinkBlueGreenDeployment bgDeployment) {
-        ObjectMeta bgMeta = bgDeployment.getMetadata();
-        ObjectMeta objectMeta = new ObjectMeta();
-        objectMeta.setNamespace(bgMeta.getNamespace());
-        objectMeta.setOwnerReferences(
-                List.of(
-                        new OwnerReference(
-                                bgDeployment.getApiVersion(),
-                                true,
-                                false,
-                                bgDeployment.getKind(),
-                                bgMeta.getName(),
-                                bgMeta.getUid())));
-        return objectMeta;
-    }
-
-    private static <T> T adjustNameReferences(
-            T spec,
-            String deploymentName,
-            String childDeploymentName,
-            String wrapperKey,
-            Class<T> valueType)
-            throws JsonProcessingException {
-        String serializedSpec = SpecUtils.serializeObject(spec, wrapperKey);
-        String replacedSerializedSpec = serializedSpec.replace(deploymentName, childDeploymentName);
-        return SpecUtils.deserializeObject(replacedSerializedSpec, wrapperKey, valueType);
-    }
-
     public static void logAndThrow(String message) {
-        LOG.error(message);
         throw new RuntimeException(message);
     }
 }

@@ -17,8 +17,6 @@
 
 package org.apache.flink.kubernetes.operator.api.spec;
 
-import org.apache.flink.kubernetes.operator.api.bluegreen.TransitionMode;
-
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
@@ -48,9 +46,6 @@ public class FlinkDeploymentTemplateSpec {
 
     @JsonProperty("reconciliationReschedulingIntervalMs")
     private int reconciliationReschedulingIntervalMs;
-
-    @JsonProperty("transitionMode")
-    private TransitionMode transitionMode;
 
     @JsonProperty("spec")
     private FlinkDeploymentSpec spec;

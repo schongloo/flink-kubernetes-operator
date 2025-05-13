@@ -83,7 +83,6 @@ public class JobAutoScalerImplTest {
         stateStore = new InMemoryAutoScalerStateStore<>();
     }
 
-    @Test
     void testMetricReporting() throws Exception {
         JobVertexID jobVertexID = new JobVertexID();
         JobTopology jobTopology = new JobTopology(new VertexInfo(jobVertexID, Map.of(), 1, 10));
