@@ -171,8 +171,7 @@ public class FlinkBlueGreenDeploymentController
             FlinkBlueGreenDeployments deployments,
             FlinkBlueGreenDeploymentStatus deploymentStatus,
             DeploymentType currentDeploymentType,
-            Context<FlinkBlueGreenDeployment> josdkContext)
-            throws JsonProcessingException {
+            Context<FlinkBlueGreenDeployment> josdkContext) {
 
         if (hasSpecChanged(bgDeployment.getSpec(), deploymentStatus)) {
             // this means the spec was changed during transition,
