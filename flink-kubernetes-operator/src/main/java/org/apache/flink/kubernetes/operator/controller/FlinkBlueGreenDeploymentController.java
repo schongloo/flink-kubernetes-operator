@@ -513,9 +513,23 @@ public class FlinkBlueGreenDeploymentController
                         "spec",
                         FlinkBlueGreenDeploymentSpec.class);
 
-        if (lastCheckpoint != null) {
+        // The B/G initialSavepointPath is only used in first time deployments
+        if (isFirstDeployment) {
+            String initialSavepointPath =
+                    adjustedSpec.getTemplate().getSpec().getJob().getInitialSavepointPath();
+            if (initialSavepointPath != null && !initialSavepointPath.isEmpty()) {
+                LOG.info("Using initialSavepointPath: " + initialSavepointPath);
+                adjustedSpec
+                        .getTemplate()
+                        .getSpec()
+                        .getJob()
+                        .setInitialSavepointPath(initialSavepointPath);
+            } else {
+                LOG.info("Clean start up, no checkpoint/savepoint");
+            }
+        } else if (lastCheckpoint != null) {
             String location = lastCheckpoint.getLocation().replace("file:", "");
-            LOG.info("Using checkpoint: " + location);
+            LOG.info("Using B/G checkpoint: " + location);
             adjustedSpec.getTemplate().getSpec().getJob().setInitialSavepointPath(location);
         }
 

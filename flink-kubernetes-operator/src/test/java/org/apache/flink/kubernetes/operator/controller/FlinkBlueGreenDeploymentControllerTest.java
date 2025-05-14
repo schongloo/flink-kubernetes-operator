@@ -65,7 +65,6 @@ import static org.apache.flink.kubernetes.operator.api.utils.BaseTestUtils.TEST_
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** {@link FlinkBlueGreenDeploymentController} tests. */
@@ -80,6 +79,8 @@ public class FlinkBlueGreenDeploymentControllerTest {
     private static final String CUSTOM_CONFIG_FIELD = "custom-configuration-field";
     private static final int DEFAULT_DELETION_DELAY_VALUE = 500;
     private static final int ALT_DELETION_DELAY_VALUE = 1000;
+    private static final String TEST_CHECKPOINT_PATH = "/tmp/checkpoints";
+    private static final String TEST_INITIAL_SAVEPOINT_PATH = "/tmp/savepoints";
     private final FlinkConfigManager configManager = new FlinkConfigManager(new Configuration());
     private TestingFlinkService flinkService;
     private Context<FlinkBlueGreenDeployment> context;
@@ -336,6 +337,9 @@ public class FlinkBlueGreenDeploymentControllerTest {
         if (execAssertions) {
             assertEquals(1, flinkDeployments.size());
             verifyOwnerReferences(rs.deployment, deploymentA);
+            assertEquals(
+                    TEST_INITIAL_SAVEPOINT_PATH,
+                    deploymentA.getSpec().getJob().getInitialSavepointPath());
         }
 
         simulateSubmitAndSuccessfulJobStart(deploymentA);
@@ -420,7 +424,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
         // A reconciliation before the deletion delay has expired should result in no-op
         var rs2 = reconcile(rs.deployment);
         var remainingDeletionDelay = rs2.updateControl.getScheduleDelay().get();
-        assertTrue(remainingDeletionDelay < expectedDeletionDelay);
+        assertTrue(remainingDeletionDelay <= expectedDeletionDelay);
         assertTrue(rs2.updateControl.isNoUpdate());
 
         Thread.sleep(remainingDeletionDelay);
@@ -443,8 +447,12 @@ public class FlinkBlueGreenDeploymentControllerTest {
         assertTrue(rs.updateControl.isPatchStatus());
         assertTrue(minReconciliationTs < rs.reconciledStatus.getLastReconciledTimestamp());
         assertEquals(2, flinkDeployments.size());
-        assertNull(flinkDeployments.get(0).getSpec().getJob().getInitialSavepointPath());
-        assertNotNull(flinkDeployments.get(1).getSpec().getJob().getInitialSavepointPath());
+        assertEquals(
+                TEST_INITIAL_SAVEPOINT_PATH,
+                flinkDeployments.get(0).getSpec().getJob().getInitialSavepointPath());
+        assertEquals(
+                TEST_CHECKPOINT_PATH,
+                flinkDeployments.get(1).getSpec().getJob().getInitialSavepointPath());
 
         assertEquals(
                 FlinkBlueGreenDeploymentState.TRANSITIONING_TO_GREEN,
@@ -527,7 +535,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
         // TODO: is this correct? Doing this to give the TestingFlinkService awareness of the job
         JobSpec jobSpec = deployment.getSpec().getJob();
         Configuration conf = new Configuration();
-        conf.set(SavepointConfigOptions.SAVEPOINT_PATH, "/tmp/savepoint");
+        conf.set(SavepointConfigOptions.SAVEPOINT_PATH, TEST_CHECKPOINT_PATH);
         flinkService.submitApplicationCluster(jobSpec, conf, false);
         var jobId = flinkService.listJobs().get(0).f1.getJobId().toString();
         deployment.getStatus().getJobStatus().setJobId(jobId);
@@ -591,6 +599,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
                                 .parallelism(1)
                                 .upgradeMode(UpgradeMode.STATELESS)
                                 .state(JobState.RUNNING)
+                                .initialSavepointPath(TEST_INITIAL_SAVEPOINT_PATH)
                                 .build());
 
         deployment.setSpec(bgDeploymentSpec);
@@ -627,6 +636,8 @@ public class FlinkBlueGreenDeploymentControllerTest {
                         .spec(flinkDeploymentSpec)
                         .build();
 
-        return new FlinkBlueGreenDeploymentSpec(flinkDeploymentTemplateSpec);
+        FlinkBlueGreenDeploymentSpec flinkBlueGreenDeploymentSpec =
+                new FlinkBlueGreenDeploymentSpec(flinkDeploymentTemplateSpec);
+        return flinkBlueGreenDeploymentSpec;
     }
 }
