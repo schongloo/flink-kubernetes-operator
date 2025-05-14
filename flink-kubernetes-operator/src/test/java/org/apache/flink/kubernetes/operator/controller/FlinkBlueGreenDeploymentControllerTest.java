@@ -636,8 +636,6 @@ public class FlinkBlueGreenDeploymentControllerTest {
                         .spec(flinkDeploymentSpec)
                         .build();
 
-        FlinkBlueGreenDeploymentSpec flinkBlueGreenDeploymentSpec =
-                new FlinkBlueGreenDeploymentSpec(flinkDeploymentTemplateSpec);
-        return flinkBlueGreenDeploymentSpec;
+        return new FlinkBlueGreenDeploymentSpec(flinkDeploymentTemplateSpec);
     }
 }
