@@ -411,7 +411,7 @@ public class FlinkBlueGreenDeploymentController
     }
 
     private static Savepoint configureSavepoint(
-            FlinkResourceContext<FlinkDeployment> resourceContext) throws Exception {
+            FlinkResourceContext<FlinkDeployment> resourceContext) {
         // TODO: if the user specified an initialSavepointPath, use it and skip this?
         Optional<Savepoint> lastCheckpoint =
                 resourceContext
