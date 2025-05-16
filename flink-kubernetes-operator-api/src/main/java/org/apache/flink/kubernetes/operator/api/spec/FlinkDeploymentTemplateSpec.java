@@ -38,14 +38,8 @@ public class FlinkDeploymentTemplateSpec {
     @JsonProperty("metadata")
     private ObjectMeta metadata;
 
-    @JsonProperty("deploymentDeletionDelayMs")
-    private int deploymentDeletionDelayMs;
-
-    @JsonProperty("abortGracePeriodMs")
-    private int abortGracePeriodMs;
-
-    @JsonProperty("reconciliationReschedulingIntervalMs")
-    private int reconciliationReschedulingIntervalMs;
+    @JsonProperty("configuration")
+    private Map<String, String> configuration;
 
     @JsonProperty("spec")
     private FlinkDeploymentSpec spec;

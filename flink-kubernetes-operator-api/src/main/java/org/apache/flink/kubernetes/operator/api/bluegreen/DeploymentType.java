@@ -30,9 +30,10 @@ public enum DeploymentType {
     /** Identifier for the second or "Green" deployment type. */
     GREEN;
 
+    public static final String LABEL_KEY = "flink/blue-green-deployment-type";
+
     public static DeploymentType fromDeployment(FlinkDeployment flinkDeployment) {
-        String typeAnnotation =
-                flinkDeployment.getMetadata().getLabels().get(DeploymentType.class.getSimpleName());
+        String typeAnnotation = flinkDeployment.getMetadata().getLabels().get(LABEL_KEY);
         return DeploymentType.valueOf(typeAnnotation);
     }
 }

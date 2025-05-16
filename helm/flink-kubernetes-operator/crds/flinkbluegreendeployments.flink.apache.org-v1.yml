@@ -27,10 +27,10 @@ spec:
             properties:
               template:
                 properties:
-                  abortGracePeriodMs:
-                    type: integer
-                  deploymentDeletionDelayMs:
-                    type: integer
+                  configuration:
+                    additionalProperties:
+                      type: string
+                    type: object
                   metadata:
                     properties:
                       annotations:
@@ -102,8 +102,6 @@ spec:
                       uid:
                         type: string
                     type: object
-                  reconciliationReschedulingIntervalMs:
-                    type: integer
                   spec:
                     properties:
                       flinkConfiguration:
@@ -10303,7 +10301,7 @@ spec:
           status:
             properties:
               abortTimestamp:
-                type: integer
+                type: string
               blueGreenState:
                 enum:
                 - ACTIVE_BLUE
@@ -10313,7 +10311,7 @@ spec:
                 - TRANSITIONING_TO_GREEN
                 type: string
               deploymentReadyTimestamp:
-                type: integer
+                type: string
               jobStatus:
                 properties:
                   checkpointInfo:
@@ -10454,7 +10452,7 @@ spec:
               lastReconciledSpec:
                 type: string
               lastReconciledTimestamp:
-                type: integer
+                type: string
               taskManager:
                 properties:
                   labelSelector:

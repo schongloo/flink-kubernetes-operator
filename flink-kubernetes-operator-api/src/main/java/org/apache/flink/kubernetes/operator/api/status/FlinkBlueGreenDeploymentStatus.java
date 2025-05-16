@@ -45,13 +45,13 @@ public class FlinkBlueGreenDeploymentStatus {
     private String lastReconciledSpec;
 
     /** Timestamp of last reconciliation. */
-    private Long lastReconciledTimestamp;
+    private String lastReconciledTimestamp;
 
     /** Computed from abortGracePeriodMs, timestamp after which the deployment should be aborted. */
-    private long abortTimestamp;
+    private String abortTimestamp;
 
     /** Timestamp when the deployment became READY/STABLE. Used to determine when to delete it. */
-    private long deploymentReadyTimestamp;
+    private String deploymentReadyTimestamp;
 
     /** Information about the TaskManagers for the scale subresource. */
     private TaskManagerInfo taskManager;

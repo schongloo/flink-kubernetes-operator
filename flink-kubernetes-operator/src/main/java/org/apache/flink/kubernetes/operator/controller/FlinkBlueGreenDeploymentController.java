@@ -48,9 +48,18 @@ import io.javaoperatorsdk.operator.processing.event.source.informer.Mappers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+
+import static org.apache.flink.kubernetes.operator.api.spec.FlinkBlueGreenDeploymentConfigOptions.ABORT_GRACE_PERIOD_MS;
+import static org.apache.flink.kubernetes.operator.api.spec.FlinkBlueGreenDeploymentConfigOptions.DEPLOYMENT_DELETION_DELAY_MS;
+import static org.apache.flink.kubernetes.operator.api.spec.FlinkBlueGreenDeploymentConfigOptions.MIN_ABORT_GRACE_PERIOD_MS;
+import static org.apache.flink.kubernetes.operator.api.spec.FlinkBlueGreenDeploymentConfigOptions.RECONCILIATION_RESCHEDULING_INTERVAL_MS;
+import static org.apache.flink.kubernetes.operator.controller.FlinkBlueGreenDeploymentUtils.getConfigOption;
+import static org.apache.flink.kubernetes.operator.controller.FlinkBlueGreenDeploymentUtils.instantStrToMillis;
+import static org.apache.flink.kubernetes.operator.controller.FlinkBlueGreenDeploymentUtils.millisToInstantStr;
 
 /** Controller that runs the main reconcile loop for Flink Blue/Green deployments. */
 @ControllerConfiguration
@@ -59,11 +68,10 @@ public class FlinkBlueGreenDeploymentController
                 EventSourceInitializer<FlinkBlueGreenDeployment> {
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkDeploymentController.class);
-    private static final int DEFAULT_RECONCILIATION_RESCHEDULING_INTERVAL_MS = 15000; // 15 secs
 
     private final FlinkResourceContextFactory ctxFactory;
 
-    public static int minimumAbortGracePeriodMs = 120000; // 2 mins
+    public static int minimumAbortGracePeriodMs = MIN_ABORT_GRACE_PERIOD_MS; // 2 mins
 
     public FlinkBlueGreenDeploymentController(FlinkResourceContextFactory ctxFactory) {
         this.ctxFactory = ctxFactory;
@@ -161,9 +169,10 @@ public class FlinkBlueGreenDeploymentController
     private static void setAbortTimestamp(
             FlinkBlueGreenDeployment bgDeployment,
             FlinkBlueGreenDeploymentStatus deploymentStatus) {
-        int abortGracePeriod = bgDeployment.getSpec().getTemplate().getAbortGracePeriodMs();
+        Integer abortGracePeriod = getConfigOption(bgDeployment, ABORT_GRACE_PERIOD_MS);
         abortGracePeriod = Math.max(abortGracePeriod, minimumAbortGracePeriodMs);
-        deploymentStatus.setAbortTimestamp(System.currentTimeMillis() + abortGracePeriod);
+        deploymentStatus.setAbortTimestamp(
+                millisToInstantStr(System.currentTimeMillis() + abortGracePeriod));
     }
 
     private UpdateControl<FlinkBlueGreenDeployment> monitorTransition(
@@ -227,21 +236,24 @@ public class FlinkBlueGreenDeploymentController
             FlinkDeployment currentDeployment,
             FlinkBlueGreenDeploymentState nextState) {
         int deploymentDeletionDelayMs =
-                Math.max(bgDeployment.getSpec().getTemplate().getDeploymentDeletionDelayMs(), 0);
+                Math.max(getConfigOption(bgDeployment, DEPLOYMENT_DELETION_DELAY_MS), 0);
 
-        if (deploymentStatus.getDeploymentReadyTimestamp() == 0) {
+        long deploymentReadyTimestamp =
+                instantStrToMillis(deploymentStatus.getDeploymentReadyTimestamp());
+
+        if (deploymentReadyTimestamp == 0) {
             LOG.info(
                     "Deployment marked ready on "
                             + System.currentTimeMillis()
                             + ", rescheduling reconciliation in "
                             + deploymentDeletionDelayMs
                             + " ms.");
-            deploymentStatus.setDeploymentReadyTimestamp(System.currentTimeMillis());
+            deploymentStatus.setDeploymentReadyTimestamp(Instant.now().toString());
             return patchStatusUpdateControl(bgDeployment, deploymentStatus, null, null)
                     .rescheduleAfter(deploymentDeletionDelayMs);
         }
 
-        var deletionTs = deploymentStatus.getDeploymentReadyTimestamp() + deploymentDeletionDelayMs;
+        var deletionTs = deploymentReadyTimestamp + deploymentDeletionDelayMs;
 
         if (deletionTs < System.currentTimeMillis()) {
             return deleteAndFinalize(
@@ -262,7 +274,7 @@ public class FlinkBlueGreenDeploymentController
             FlinkBlueGreenDeployments deployments) {
 
         String deploymentName = nextDeployment.getMetadata().getName();
-        long abortTimestamp = deploymentStatus.getAbortTimestamp();
+        long abortTimestamp = instantStrToMillis(deploymentStatus.getAbortTimestamp());
 
         if (abortTimestamp == 0) {
             throw new IllegalStateException("Unexpected abortTimestamp == 0");
@@ -314,15 +326,6 @@ public class FlinkBlueGreenDeploymentController
         }
     }
 
-    private static int getReconciliationReschedInterval(FlinkBlueGreenDeployment bgDeployment) {
-        int reconciliationReschedInterval =
-                bgDeployment.getSpec().getTemplate().getReconciliationReschedulingIntervalMs();
-        if (reconciliationReschedInterval <= 0) {
-            reconciliationReschedInterval = DEFAULT_RECONCILIATION_RESCHEDULING_INTERVAL_MS;
-        }
-        return reconciliationReschedInterval;
-    }
-
     private UpdateControl<FlinkBlueGreenDeployment> deleteAndFinalize(
             FlinkBlueGreenDeployment bgDeployment,
             FlinkBlueGreenDeploymentStatus deploymentStatus,
@@ -340,8 +343,8 @@ public class FlinkBlueGreenDeploymentController
                             + "' to "
                             + nextState
                             + " state");
-            deploymentStatus.setDeploymentReadyTimestamp(0);
-            deploymentStatus.setAbortTimestamp(0);
+            deploymentStatus.setDeploymentReadyTimestamp(millisToInstantStr(0));
+            deploymentStatus.setAbortTimestamp(millisToInstantStr(0));
             return patchStatusUpdateControl(
                     bgDeployment, deploymentStatus, nextState, JobStatus.RUNNING);
         }
@@ -407,7 +410,7 @@ public class FlinkBlueGreenDeploymentController
             FlinkBlueGreenDeploymentStatus deploymentStatus) {
         deploymentStatus.setLastReconciledSpec(
                 SpecUtils.writeSpecAsJSON(bgDeployment.getSpec(), "spec"));
-        deploymentStatus.setLastReconciledTimestamp(System.currentTimeMillis());
+        deploymentStatus.setLastReconciledTimestamp(Instant.now().toString());
     }
 
     private static Savepoint configureSavepoint(
@@ -449,9 +452,12 @@ public class FlinkBlueGreenDeploymentController
 
         setAbortTimestamp(bgDeployment, deploymentStatus);
 
+        var reconciliationReschedInterval =
+                Math.max(getConfigOption(bgDeployment, RECONCILIATION_RESCHEDULING_INTERVAL_MS), 0);
+
         return patchStatusUpdateControl(
                         bgDeployment, deploymentStatus, nextState, JobStatus.RECONCILING)
-                .rescheduleAfter(getReconciliationReschedInterval(bgDeployment));
+                .rescheduleAfter(reconciliationReschedInterval);
     }
 
     private boolean isDeploymentReady(FlinkDeployment deployment) {
@@ -481,7 +487,7 @@ public class FlinkBlueGreenDeploymentController
             deploymentStatus.getJobStatus().setState(jobState);
         }
 
-        deploymentStatus.setLastReconciledTimestamp(System.currentTimeMillis());
+        deploymentStatus.setLastReconciledTimestamp(Instant.now().toString());
         flinkBlueGreenDeployment.setStatus(deploymentStatus);
         return UpdateControl.patchStatus(flinkBlueGreenDeployment);
     }
@@ -491,8 +497,7 @@ public class FlinkBlueGreenDeploymentController
             DeploymentType deploymentType,
             Savepoint lastCheckpoint,
             Context<FlinkBlueGreenDeployment> josdkContext,
-            boolean isFirstDeployment)
-            throws JsonProcessingException {
+            boolean isFirstDeployment) {
         ObjectMeta bgMeta = bgDeployment.getMetadata();
 
         // Deployment
@@ -538,8 +543,7 @@ public class FlinkBlueGreenDeploymentController
         ObjectMeta flinkDeploymentMeta =
                 FlinkBlueGreenDeploymentUtils.getDependentObjectMeta(bgDeployment);
         flinkDeploymentMeta.setName(childDeploymentName);
-        flinkDeploymentMeta.setLabels(
-                Map.of(deploymentType.getClass().getSimpleName(), deploymentType.toString()));
+        flinkDeploymentMeta.setLabels(Map.of(DeploymentType.LABEL_KEY, deploymentType.toString()));
         flinkDeployment.setMetadata(flinkDeploymentMeta);
 
         // Deploy

@@ -17,13 +17,15 @@
 
 package org.apache.flink.kubernetes.operator.controller;
 
+import org.apache.flink.configuration.ConfigOption;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.kubernetes.operator.api.FlinkBlueGreenDeployment;
 import org.apache.flink.kubernetes.operator.api.utils.SpecUtils;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 
+import java.time.Instant;
 import java.util.List;
 
 /** Utility methods for the FlinkBlueGreenDeploymentController. */
@@ -50,10 +52,26 @@ public class FlinkBlueGreenDeploymentUtils {
             String deploymentName,
             String childDeploymentName,
             String wrapperKey,
-            Class<T> valueType)
-            throws JsonProcessingException {
+            Class<T> valueType) {
         String serializedSpec = SpecUtils.writeSpecAsJSON(spec, wrapperKey);
         String replacedSerializedSpec = serializedSpec.replace(deploymentName, childDeploymentName);
         return SpecUtils.readSpecFromJSON(replacedSerializedSpec, wrapperKey, valueType);
+    }
+
+    public static String millisToInstantStr(long millis) {
+        return Instant.ofEpochMilli(millis).toString();
+    }
+
+    public static long instantStrToMillis(String instant) {
+        if (instant == null) {
+            return 0;
+        }
+        return Instant.parse(instant).toEpochMilli();
+    }
+
+    public static <T> T getConfigOption(
+            FlinkBlueGreenDeployment bgDeployment, ConfigOption<T> option) {
+        return Configuration.fromMap(bgDeployment.getSpec().getTemplate().getConfiguration())
+                .get(option);
     }
 }
