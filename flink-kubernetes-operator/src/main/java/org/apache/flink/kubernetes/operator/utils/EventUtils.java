@@ -19,6 +19,7 @@ package org.apache.flink.kubernetes.operator.utils;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.kubernetes.operator.exception.DeploymentFailedException;
+import org.apache.flink.kubernetes.operator.observer.JobStatusObserver;
 
 import io.fabric8.kubernetes.api.model.Event;
 import io.fabric8.kubernetes.api.model.EventBuilder;
@@ -38,6 +39,7 @@ import java.net.HttpURLConnection;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -102,6 +104,40 @@ public class EventUtils {
                 .inNamespace(target.getMetadata().getNamespace())
                 .withName(eventName)
                 .get();
+    }
+
+    /**
+     * Create or update an event for the target resource. If the event already exists, it will be
+     * updated with the new annotations, message and the count will be increased.
+     */
+    public static boolean createWithAnnotations(
+            KubernetesClient client,
+            HasMetadata target,
+            EventRecorder.Type type,
+            String reason,
+            String message,
+            EventRecorder.Component component,
+            Consumer<Event> eventListener,
+            @Nullable String messageKey,
+            @Nullable Map<String, String> annotations) {
+        String eventName =
+                generateEventName(
+                        target, type, reason, messageKey != null ? messageKey : message, component);
+        Event existing = findExistingEvent(client, target, eventName);
+
+        if (existing != null) {
+            existing.setLastTimestamp(Instant.now().toString());
+            existing.setCount(existing.getCount() + 1);
+            existing.setMessage(message);
+            setAnnotations(existing, annotations);
+            createOrReplaceEvent(client, existing).ifPresent(eventListener);
+            return false;
+        } else {
+            Event event = buildEvent(target, type, reason, message, component, eventName);
+            setAnnotations(event, annotations);
+            createOrReplaceEvent(client, event).ifPresent(eventListener);
+            return true;
+        }
     }
 
     public static boolean createIfNotExists(
@@ -182,6 +218,16 @@ public class EventUtils {
         existing.getMetadata().setLabels(labels);
     }
 
+    private static void setAnnotations(Event existing, @Nullable Map<String, String> annotations) {
+        if (annotations == null) {
+            return;
+        }
+        if (existing.getMetadata() == null) {
+            existing.setMetadata(new ObjectMeta());
+        }
+        existing.getMetadata().setAnnotations(annotations);
+    }
+
     private static Event buildEvent(
             HasMetadata target,
             EventRecorder.Type type,
@@ -239,13 +285,13 @@ public class EventUtils {
         return Optional.empty();
     }
 
-    private static List<Event> getPodEvents(KubernetesClient client, Pod pod) {
-        var ref = getObjectReference(pod);
+    private static List<Event> getResourceEvents(KubernetesClient client, HasMetadata cr) {
+        var ref = getObjectReference(cr);
 
         var eventList =
                 client.v1()
                         .events()
-                        .inNamespace(pod.getMetadata().getNamespace())
+                        .inNamespace(cr.getMetadata().getNamespace())
                         .withInvolvedObject(ref)
                         .list();
 
@@ -299,7 +345,7 @@ public class EventUtils {
         boolean notReady = checkStatusWasAlways(pod, conditionMap.get("Ready"), "False");
 
         if (notReady && failedInitialization) {
-            getPodEvents(client, pod).stream()
+            getResourceEvents(client, pod).stream()
                     .filter(e -> e.getReason().equals("FailedMount"))
                     .findAny()
                     .ifPresent(
@@ -311,5 +357,21 @@ public class EventUtils {
 
     private static boolean checkStatusWasAlways(Pod pod, PodCondition condition, String status) {
         return condition != null && condition.getStatus().equals(status);
+    }
+
+    public static Optional<Instant> findLastJobExceptionTsFromK8s(
+            KubernetesClient client, HasMetadata cr) {
+        var events = getResourceEvents(client, cr);
+        return events.stream()
+                .filter(e -> EventRecorder.Reason.JobException.name().equals(e.getReason()))
+                .map(
+                        e ->
+                                Instant.parse(
+                                        e.getMetadata()
+                                                .getAnnotations()
+                                                .getOrDefault(
+                                                        JobStatusObserver.EXCEPTION_TIMESTAMP,
+                                                        e.getMetadata().getCreationTimestamp())))
+                .max(Comparator.naturalOrder());
     }
 }
