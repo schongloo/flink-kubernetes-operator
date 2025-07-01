@@ -27,7 +27,6 @@ import org.apache.flink.kubernetes.operator.config.FlinkConfigManager;
 import org.apache.flink.kubernetes.operator.reconciler.ReconciliationUtils;
 
 import io.javaoperatorsdk.operator.api.reconciler.Context;
-import io.javaoperatorsdk.operator.api.reconciler.ErrorStatusHandler;
 import io.javaoperatorsdk.operator.api.reconciler.ErrorStatusUpdateControl;
 import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
 import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
@@ -36,8 +35,7 @@ import lombok.Getter;
 
 /** A wrapper around {@link FlinkBlueGreenDeploymentController} used by unit tests. */
 public class TestingFlinkBlueGreenDeploymentController
-        implements Reconciler<FlinkBlueGreenDeployment>,
-                ErrorStatusHandler<FlinkBlueGreenDeployment> {
+        implements Reconciler<FlinkBlueGreenDeployment> {
 
     @Getter private TestingFlinkResourceContextFactory contextFactory;
 

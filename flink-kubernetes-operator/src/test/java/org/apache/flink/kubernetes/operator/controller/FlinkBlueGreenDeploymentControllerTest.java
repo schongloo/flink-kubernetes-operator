@@ -215,7 +215,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
         for (int i = 0; i < 2; i++) {
             rs = reconcile(rs.deployment);
             assertTrue(rs.updateControl.isPatchStatus());
-            assertFalse(rs.updateControl.isUpdateResource());
+            assertFalse(rs.updateControl.isPatchResource());
             assertTrue(rs.updateControl.getScheduleDelay().isPresent());
             reschedDelayMs = rs.updateControl.getScheduleDelay().get();
             assertTrue(reschedDelayMs < abortGracePeriodMs && reschedDelayMs > 0);
@@ -318,7 +318,7 @@ public class FlinkBlueGreenDeploymentControllerTest {
         // Resubmitting should re-start the Initialization to Blue
         rs = reconcile(rs.deployment);
 
-        assertTrue(rs.updateControl.isUpdateStatus());
+        assertTrue(rs.updateControl.isPatchStatus());
         assertTrue(
                 rs.updateControl.getScheduleDelay().isPresent()
                         && rs.updateControl.getScheduleDelay().get() > 0);
@@ -546,8 +546,8 @@ public class FlinkBlueGreenDeploymentControllerTest {
 
         return new TestingFlinkBlueGreenDeploymentController.BlueGreenReconciliationResult(
                 updateControl,
-                updateControl.getResource(),
-                updateControl.isNoUpdate() ? null : updateControl.getResource().getStatus());
+                updateControl.getResource().orElse(null),
+                updateControl.isNoUpdate() ? null : updateControl.getResource().get().getStatus());
     }
 
     private void simulateSubmitAndSuccessfulJobStart(FlinkDeployment deployment) throws Exception {

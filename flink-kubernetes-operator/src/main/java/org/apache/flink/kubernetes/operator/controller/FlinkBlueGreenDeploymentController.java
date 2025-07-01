@@ -35,11 +35,10 @@ import org.apache.flink.util.Preconditions;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.StatusDetails;
-import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
+import io.javaoperatorsdk.operator.api.config.informer.InformerEventSourceConfiguration;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.ControllerConfiguration;
 import io.javaoperatorsdk.operator.api.reconciler.EventSourceContext;
-import io.javaoperatorsdk.operator.api.reconciler.EventSourceInitializer;
 import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
 import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
 import io.javaoperatorsdk.operator.processing.event.source.EventSource;
@@ -49,6 +48,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -63,9 +63,7 @@ import static org.apache.flink.kubernetes.operator.controller.FlinkBlueGreenDepl
 
 /** Controller that runs the main reconcile loop for Flink Blue/Green deployments. */
 @ControllerConfiguration
-public class FlinkBlueGreenDeploymentController
-        implements Reconciler<FlinkBlueGreenDeployment>,
-                EventSourceInitializer<FlinkBlueGreenDeployment> {
+public class FlinkBlueGreenDeploymentController implements Reconciler<FlinkBlueGreenDeployment> {
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkDeploymentController.class);
 
@@ -78,18 +76,37 @@ public class FlinkBlueGreenDeploymentController
     }
 
     @Override
-    public Map<String, EventSource> prepareEventSources(
-            EventSourceContext<FlinkBlueGreenDeployment> eventSourceContext) {
-        InformerConfiguration<FlinkDeployment> flinkDeploymentInformerConfig =
-                InformerConfiguration.from(FlinkDeployment.class, eventSourceContext)
-                        .withSecondaryToPrimaryMapper(Mappers.fromOwnerReference())
-                        .withNamespacesInheritedFromController(eventSourceContext)
-                        .followNamespaceChanges(true)
+    public List<EventSource<?, FlinkBlueGreenDeployment>> prepareEventSources(
+            EventSourceContext<FlinkBlueGreenDeployment> context) {
+        List<EventSource<?, FlinkBlueGreenDeployment>> eventSources = new ArrayList<>();
+
+        InformerEventSourceConfiguration<FlinkDeployment> config =
+                InformerEventSourceConfiguration.from(
+                                FlinkDeployment.class, FlinkBlueGreenDeployment.class)
+                        .withSecondaryToPrimaryMapper(
+                                Mappers.fromOwnerReferences(context.getPrimaryResourceClass()))
+                        .withNamespacesInheritedFromController()
+                        .withFollowControllerNamespacesChanges(true)
                         .build();
 
-        return EventSourceInitializer.nameEventSources(
-                new InformerEventSource<>(flinkDeploymentInformerConfig, eventSourceContext));
+        eventSources.add(new InformerEventSource<>(config, context));
+
+        return eventSources;
     }
+
+    //    @Override
+    //    public Map<String, EventSource> prepareEventSources(
+    //            EventSourceContext<FlinkBlueGreenDeployment> eventSourceContext) {
+    //        InformerConfiguration<FlinkDeployment> flinkDeploymentInformerConfig =
+    //                InformerConfiguration.from(FlinkDeployment.class, eventSourceContext)
+    //                        .withSecondaryToPrimaryMapper(Mappers.fromOwnerReference())
+    //                        .withNamespacesInheritedFromController(eventSourceContext)
+    //                        .followNamespaceChanges(true)
+    //                        .build();
+    //
+    //        return EventSourceInitializer.nameEventSources(
+    //                new InformerEventSource<>(flinkDeploymentInformerConfig, eventSourceContext));
+    //    }
 
     @Override
     public UpdateControl<FlinkBlueGreenDeployment> reconcile(
